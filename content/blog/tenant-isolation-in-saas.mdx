@@ -1,0 +1,137 @@
+---
+title: "Tenant Isolation in Multi-Tenant SaaS Applications"
+slug: "tenant-isolation-in-saas"
+description: "A practical look at authentication, tenant context, authorization, and database query boundaries in TypeScript backends."
+date: "2026-11-09"
+updatedAt: null
+author: "edmealem"
+tags: ["TypeScript", "Backend", "Architecture", "Security"]
+featured: true
+published: true
+coverImage: "/images/blog/tenant-isolation-placeholder.webp"
+coverImageAlt: "Illustrative diagram of tenant boundaries"
+---
+
+When you build a SaaS application that serves multiple organizations, the hardest part often isn't creating a `tenantId` column. It's making sure that **every request and every data operation respects the tenant boundary**.
+
+That boundary appears in authentication, authorization, API handlers, database queries, background jobs, and even logs. Missing it in one place can expose data that belongs to a different customer.
+
+In this article, I'll walk through a practical TypeScript backend approach for thinking about tenant isolation. The code is simplified to illustrate the design, not to represent a production-ready authorization framework.
+
+## Authentication is not tenant authorization
+
+Authentication answers: **Who is making this request?**
+
+Authorization answers: **What is this person allowed to do?**
+
+Multi-tenancy adds another question: **Within which organization is this request being made?**
+
+A signed-in user may belong to more than one organization. A valid session should not automatically grant access to every resource referenced by a URL.
+
+For example, consider this request:
+
+```http
+GET /api/organizations/org_123/orders/order_987
+```
+
+The server needs to verify at least three things:
+
+1. The session belongs to a valid user.
+2. The user has an active membership in `org_123` with permission to view orders.
+3. The requested order actually belongs to `org_123`.
+
+Checking only the first two still leaves a potential cross-tenant data leak if the query fetches `order_987` by ID alone.
+
+## Treat tenant context as trusted server state
+
+It is tempting to accept a `tenantId` from a request body and pass it directly to a repository function. That is unsafe unless the server independently verifies the user's relationship to that tenant.
+
+A safer design resolves and validates a tenant context before business logic runs.
+
+```ts
+// Illustrative types only — not a complete middleware implementation.
+type TenantContext = {
+  userId: string;
+  tenantId: string;
+  permissions: ReadonlySet<string>;
+};
+
+function requirePermission(
+  context: TenantContext,
+  permission: string,
+): void {
+  if (!context.permissions.has(permission)) {
+    throw new Error("Forbidden");
+  }
+}
+```
+
+In a real application, the context should be created from a validated session and an authoritative membership lookup. Its permissions may need refresh or revocation handling; don't treat stale client-side claims as your source of truth.
+
+## Scope the database operation itself
+
+Authorization shouldn't stop at a middleware check. The final query must enforce the same ownership boundary.
+
+Suppose an order has `id` and `tenantId` columns. A tenant-aware lookup should include both:
+
+```ts
+// Pseudocode showing the required predicate.
+const order = await db.query.orders.findFirst({
+  where: and(
+    eq(orders.id, requestedOrderId),
+    eq(orders.tenantId, context.tenantId),
+  ),
+});
+```
+
+This pattern matters because resource identifiers can be guessed, leaked, or copied from previous requests. A valid identifier is not proof of permission.
+
+It is also important for updates and deletes. Prefer operations that include tenant ownership in the same statement, or use a transaction that enforces the boundary atomically.
+
+## Be careful with nested resources
+
+In relational databases, tenant ownership may be indirect. An order item might belong to an order, which belongs to a tenant. When querying nested data, make sure the join or relationship filter includes that ownership chain.
+
+For new schemas, I like asking three questions before writing an endpoint:
+
+- Where is the authoritative tenant association stored?
+- Which membership or permission permits this action?
+- Can the final query prove that the target resource belongs to the tenant?
+
+Those questions catch many design mistakes before they become security bugs.
+
+## Background jobs need tenant context too
+
+Not all sensitive work happens inside an HTTP request. Background tasks may process emails, imports, notifications, or cleanup operations long after the original request completes.
+
+A job payload containing only `recordId` often isn't enough. Workers need to re-establish the appropriate tenant boundary and fetch the record with the same ownership constraints that a normal API request would use.
+
+```ts
+// Illustrative job payload, not a complete job contract.
+type RebuildReportJob = {
+  tenantId: string;
+  reportId: string;
+};
+```
+
+The worker must still validate that the report belongs to the tenant. A tenant ID inside a queued payload is not automatically an authorization grant; it should originate from trusted server logic and be rechecked when necessary.
+
+## Test the boundary with negative cases
+
+The most convincing tests aren't the ones showing that tenant A can read its own order. They are the ones proving that tenant A **cannot** read, update, or delete tenant B's order.
+
+A useful integration suite includes:
+
+- A user with valid access to tenant A who requests tenant B's resource.
+- A former member whose access has been revoked.
+- A user who belongs to two tenants but has different permissions in each.
+- A background job whose record no longer belongs to the supplied tenant.
+- An update that targets an existing ID but fails the tenant predicate.
+
+Run these against a real test database when possible so the tests cover actual query behavior and constraints.
+
+## Final thoughts
+
+Multi-tenancy is not a single middleware function. It is a rule that must remain true across the entire lifecycle of a request or job.
+
+The design gets more reliable when tenant boundaries are explicit in context, authorization, queries, and tests. That's the kind of backend architecture I want to keep improving in my own projects.

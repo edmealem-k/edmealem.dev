@@ -1,0 +1,90 @@
+---
+title: "hono-commerce"
+slug: "hono-commerce"
+tagline: "A multi-tenant e-commerce platform built with TypeScript"
+summary: "An evolving commerce platform exploring tenant-aware architecture, authentication, APIs, background processing, and modern full-stack TypeScript."
+category: "Full-stack / SaaS"
+status: "In development"
+featured: true
+order: 1
+tags: ["TypeScript", "Next.js", "Hono", "Bun", "PostgreSQL", "Drizzle", "Redis", "BullMQ"]
+coverImage: "/images/projects/hono-commerce-cover-placeholder.webp"
+repositoryUrl: null
+liveUrl: null
+published: true
+---
+
+*A multi-tenant e-commerce platform built with modern TypeScript tools.*
+
+## Overview
+
+hono-commerce is a personal engineering project I'm building to explore how a multi-tenant commerce application can be structured across a storefront, an administrative dashboard, an API, and background services.
+
+The project brings together technologies I use for full-stack development while giving me space to work through problems that arise beyond a simple CRUD application: tenant-aware permissions, data ownership, service boundaries, file storage, asynchronous work, and maintainable database design.
+
+The platform is **under active development**. I use it as an evolving architecture and implementation project, rather than presenting it as a fully launched production e-commerce service.
+
+## Why I started it
+
+Commerce applications touch many connected workflows. A single user action may involve authorization, data validation, a database update, an external service, and a background task. In a multi-tenant product, all of those operations also need to respect the organization or workspace that owns the data.
+
+I wanted a project where I could design those boundaries intentionally and learn from implementing them.
+
+## Technology stack
+
+- **Language and runtime:** TypeScript, Bun.
+- **Frontend:** Next.js and React.
+- **API:** Hono, with typed client/API integration patterns.
+- **Database:** PostgreSQL with Drizzle ORM.
+- **Authentication:** Better Auth in shared authentication infrastructure.
+- **Asynchronous processing:** Redis, BullMQ, dedicated worker application.
+- **Storage workflows:** S3-based file upload and lifecycle-related operations.
+- **Project organization:** Multi-application monorepo with reusable packages.
+
+## Architecture and design
+
+The codebase is organized around applications and shared packages. The frontend applications cover different responsibilities, while shared code centralizes cross-cutting concerns such as data models, authentication, types, and queue integration.
+
+Typical architectural responsibilities include:
+
+- Separating user-facing storefront experiences from administrative workflows.
+- Exposing backend functionality through a dedicated Hono API.
+- Representing organization membership and permissions explicitly.
+- Designing tenant-scoped operations to avoid accidental cross-organization access.
+- Using background workers for work that does not belong in the critical request path.
+- Keeping database queries, validation, and domain behavior organized for maintainability.
+
+## Engineering focus
+
+### Tenant-aware access control
+
+A core concern is ensuring that a user can access only the resources permitted within their current organization or tenant. This requires more than checking whether a user is logged in: requests must establish tenant context, resolve membership, enforce permissions, and scope data operations accordingly.
+
+### Type-safe API contracts
+
+I use TypeScript and Hono to make API interactions easier to reason about across the frontend and backend. Validation, response shapes, and clear boundaries help prevent integration mistakes as the project grows.
+
+### File-upload lifecycle
+
+The repository includes upload-session and confirmation concepts around S3-style storage workflows. I use this area to think about permission checks, incomplete uploads, status transitions, cleanup, and how to avoid leaving inconsistent application records.
+
+### Background processing
+
+The project includes a worker/queue architecture built around BullMQ and Redis. A reliable background task needs more than an enqueue call: retry behavior, deduplication/idempotency, failure visibility, and recovery all matter.
+
+## Current status and next steps
+
+hono-commerce is still being developed and refined. My near-term focus is on completing coherent business flows, hardening authorization and transaction boundaries, improving test coverage, and validating behavior through real application scenarios.
+
+## What I'm learning
+
+The most useful part of the project is treating backend features as connected systems rather than isolated endpoints. Authentication decisions influence query design, queue semantics influence data consistency, and seemingly simple actions like an upload confirmation raise questions about concurrency and recovery.
+
+Working through these tradeoffs is why I continue investing in the project.
+
+## Explore the project
+
+- **Source:** private during active development — no public source link at this time.
+- **Demo:** [TODO: insert a real public demonstration only after one is available].
+- **Screenshots:** [TODO: provide genuine screenshots of working flows].
+- **Technical notes:** [TODO: link related blog articles after publication].

@@ -1,0 +1,141 @@
+---
+title: "Reliable Background Jobs in Node.js: Retries and Idempotency"
+slug: "reliable-background-jobs-nodejs"
+description: "Why retrying a queue job isn't enough, and how to design safer background processing around durable state and idempotent effects."
+date: "2026-11-09"
+updatedAt: null
+author: "edmealem"
+tags: ["Node.js", "TypeScript", "BullMQ", "Reliability"]
+featured: false
+published: true
+coverImage: "/images/blog/background-jobs-placeholder.webp"
+coverImageAlt: "Illustrative background-job processing diagram"
+---
+
+Background jobs make web applications easier to scale and maintain. Instead of keeping an HTTP request open while sending emails, generating reports, or processing uploaded files, an API can enqueue work and return a response sooner.
+
+But putting work in a queue doesn't automatically make the work reliable.
+
+A job can fail halfway through. A worker can restart after a side effect succeeds but before the queue records completion. A network request can time out even though the remote service processed it. When the job retries, the same work may happen twice.
+
+This article explores the questions I use to reason about those failures in Node.js and TypeScript applications.
+
+## The gap between execution and completion
+
+Imagine a worker responsible for emailing a receipt:
+
+1. The job starts.
+2. The email service accepts the message.
+3. The worker crashes before acknowledging completion.
+4. The queue retries the job.
+
+From the queue's point of view, the job didn't finish. From the email provider's point of view, the message may already have been sent.
+
+That is why a retry policy alone cannot guarantee exactly-once business effects.
+
+## Start with durable state
+
+Before choosing a queue library, identify what must survive a process restart.
+
+For a notification workflow, that might include the notification record, its intended recipient, a delivery status, attempt count, and a stable operation identifier.
+
+```ts
+type NotificationStatus = "pending" | "sending" | "sent" | "failed";
+
+type NotificationRecord = {
+  id: string;
+  recipientId: string;
+  status: NotificationStatus;
+  attempts: number;
+};
+```
+
+These types are only illustrative. A production model would also need operational fields, timestamps, constraints, and possibly external provider identifiers.
+
+## Idempotency is a business-level property
+
+Idempotency means applying the same logical operation more than once should not produce an incorrect additional effect.
+
+For a payment, that might mean preventing a second charge. For inventory, it might mean preventing the same order from decrementing stock twice. For an email, duplicates may still be possible unless the delivery provider supports an idempotency mechanism or the application has a reliable coordination strategy.
+
+A typical design uses a **stable key** for the logical operation:
+
+```ts
+const idempotencyKey = `receipt:${orderId}`;
+```
+
+A uniqueness constraint can prevent duplicate logical operation records. However, merely checking "has this been done?" and then performing a side effect is not atomic. Two workers can both pass that check concurrently.
+
+For database effects, use constraints and transactions. For external services, prefer provider-supported idempotency keys where available, and design for ambiguous outcomes.
+
+## Retries should be deliberate
+
+Not every error deserves the same response.
+
+- A transient network failure may be worth retrying.
+- A rate limit may require waiting longer.
+- Invalid input usually needs correction rather than repeated attempts.
+- An authorization failure may be permanent or may indicate stale credentials.
+
+An exponential backoff policy spaces retries to reduce repeated pressure on unhealthy dependencies.
+
+BullMQ supports retry attempts and backoff policies. A minimal example looks like this:
+
+```ts
+import { Queue } from "bullmq";
+
+const queue = new Queue("notifications", {
+  connection: { host: "localhost", port: 6379 },
+});
+
+await queue.add(
+  "send-receipt",
+  { orderId: "order_123" },
+  {
+    jobId: "receipt-order_123",
+    attempts: 5,
+    backoff: { type: "exponential", delay: 1000 },
+  },
+);
+```
+
+This example demonstrates a queue configuration, **not** a complete reliable email delivery system. A unique job ID helps with some duplicate enqueues while the job exists, but is not permanent business-level deduplication after jobs are removed. Side-effect idempotency still belongs in the application design.
+
+## Worker crashes are normal failure scenarios
+
+A worker may stop at any point. It might finish a database update but fail before telling the queue, or it might lose a connection while an external API continues processing the request.
+
+A good test plan includes forced process interruption at critical points:
+
+1. Before a side effect starts.
+2. After the side effect succeeds but before completion is recorded.
+3. During a transient external-service failure.
+4. While two workers compete to process related work.
+
+Each test should assert the correct **business outcome**, not just whether the worker function returned without throwing.
+
+## Observability helps explain failures
+
+For background work, I'd want to see at least the number of waiting jobs, failed jobs, retry attempts, oldest waiting-job age, and recent worker errors.
+
+A queue dashboard can help inspect individual jobs. Structured logs and traces can connect an API request to the background work it schedules. Metrics and alerts make stuck processing visible before it becomes a customer complaint.
+
+Observability doesn't replace tests or transactional design, but it makes failures much easier to diagnose.
+
+## A practical approach
+
+When I design an asynchronous workflow, I start by asking:
+
+- What is the logical operation and its stable identifier?
+- Which data changes must be atomic?
+- Which side effects can be repeated safely?
+- What happens if the worker stops after any step?
+- How do we detect and recover work that never finishes?
+
+A queue can deliver work, but the application still owns the meaning of success and failure.
+
+## Final thoughts
+
+Reliable jobs require a combination of durable state, sensible retry policies, idempotent business effects, and operational visibility.
+
+The goal isn't to pretend that failures won't occur. It's to make the system behave predictably when they do.
