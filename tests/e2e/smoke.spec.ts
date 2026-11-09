@@ -13,9 +13,10 @@ test.describe("Site Smoke & Route Tests", () => {
     expect(mainContent).not.toContain("Victor Eke");
     expect(mainContent).not.toContain("victoreke.com");
 
-    // Discreet footer attribution should be present
+    // Footer content displays owner copyright
     const footerContent = await page.textContent("footer");
-    expect(footerContent).toContain("Portfolio adapted from Victor Eke");
+    expect(footerContent).toContain("Edmealem Kassahun");
+    expect(footerContent).toContain("All rights reserved");
 
     // Work Experience renders all three companies with verified dates
     const bodyContent = await page.textContent("body");
