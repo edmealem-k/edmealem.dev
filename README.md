@@ -5,8 +5,6 @@ Personal portfolio and technical writing website for **Edmealem Kassahun**, a fu
 **Website:** [edmealem.dev](https://edmealem.dev) *(planned custom domain; deployment and DNS to be confirmed)*  
 **Repository:** [edmealem-k/edmealem.dev](https://github.com/edmealem-k/edmealem.dev)
 
-> **Development status:** This repository has been adapted from [Victor Eke's open-source portfolio](https://github.com/Evavic44/victoreke.com). The architecture migration from Sanity CMS to local MDX, typed configuration, and Bun package management is complete, preserving the original visual UI and layout.
-
 ## Goals
 
 - Present professional background, work experience, and developer projects in a clean, accessible portfolio.
