@@ -42,7 +42,7 @@ export const siteConfig: SiteConfig = {
   location: "Bahir Dar, Ethiopia",
   email: process.env.NEXT_PUBLIC_CONTACT_EMAIL || "edmealemkassahun@gmail.com",
   resumeUrl: "/resume.pdf",
-  supportUrl: undefined, // Optional creator URL; keep undefined until configured
+  supportUrl: process.env.NEXT_PUBLIC_SUPPORT_URL || undefined,
   githubUsername: process.env.NEXT_PUBLIC_GITHUB_USERNAME || "edmealem-k",
   social: {
     github: "https://github.com/edmealem-k",
