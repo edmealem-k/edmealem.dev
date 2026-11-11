@@ -1,0 +1,758 @@
+---
+title: "Drizzle ORM with PostgreSQL: A Practical Guide to Schemas, Relations, and Migrations"
+slug: "drizzle-orm-postgres-schemas-relations-migrations"
+description: "A hands-on guide to using Drizzle ORM with PostgreSQL in a Node.js, Express, and TypeScript API—covering setup, schemas, inferred types, relations, typed queries, validation, and migrations."
+date: "2026-11-11"
+updatedAt: null
+author: "edmealem"
+tags: ["Drizzle ORM", "PostgreSQL", "TypeScript", "Backend"]
+featured: false
+published: true
+coverImage: "/images/blog/drizzle-orm-postgres.webp"
+coverImageAlt: "Relational database schema with floating glass table models and emerald key connections"
+---
+
+I built [drizzle-express-api](https://github.com/edmealem-k/drizzle-express-api) to learn Drizzle by building a real, small API: define a PostgreSQL schema, connect it to TypeScript, model users and posts, and follow those decisions through migrations and queries.
+
+This is the study guide I wanted while building it. It focuses on the concepts that take a little time to settle in: where Drizzle's type safety comes from, how relations differ from foreign keys, what a migration actually records, and where database guarantees end and application logic begins. The examples follow the repository's PostgreSQL and `postgres` driver setup. A few sections show deliberate improvements or extensions; I call those out instead of implying the repository already implements them.
+
+**Study time:** about 30–35 minutes if you read the explanations and work through the code examples. Use the quick reference at the end when you come back to a specific topic.
+
+## What Drizzle is—and what it is not
+
+Drizzle is a TypeScript library for describing database schemas and composing database queries. It is often called an ORM, but it stays close to the SQL model: tables and columns are explicit, query operations map to familiar SQL operations, and PostgreSQL remains responsible for executing SQL and enforcing database constraints. You can inspect the SQL Drizzle produces rather than relying on hidden persistence behavior.
+
+Drizzle is a set of cooperating pieces rather than one all-in-one runtime:
+
+| Piece | What it does | Used here |
+|---|---|---|
+| `drizzle-orm` | Typed schema and query APIs for the runtime | Yes |
+| Database driver | Opens connections and sends SQL to PostgreSQL | `postgres` / Postgres.js |
+| `drizzle-kit` | CLI for schema snapshots, migrations, and Studio | Yes |
+| `drizzle-zod` | Derives Zod schemas from Drizzle tables | Yes |
+| `zod` | Validates untrusted values at runtime | Yes |
+
+The ORM does not start PostgreSQL, validate Express request bodies by itself, or silently keep a production database synchronized with TypeScript. Those responsibilities belong to the database service, an input-validation layer, and an explicit schema-management workflow.
+
+The project currently locks `drizzle-orm` at 0.45.4 and `drizzle-kit` at 0.31.11. Most examples below follow those 0.x APIs. Drizzle's documentation is evolving toward a newer relations API, so version-check examples before copying them; the [official overview](https://orm.drizzle.team/docs/overview) and [relations migration notes](https://orm.drizzle.team/docs/relations-v1-v2) explain the broader model and API changes.
+
+## The useful mental model: three layers
+
+When using Drizzle, keep three things distinct:
+
+1. **The TypeScript schema** describes tables, columns, nullability, defaults, constraints, and indexes in code.
+2. **The PostgreSQL schema** is the real structure that exists in the database. Migrations change this structure.
+3. **The query layer** builds SQL and maps the returned rows to TypeScript types. Drizzle does not replace PostgreSQL or make database rules optional.
+
+A fourth layer sits beside them: **relations metadata**. It describes how Drizzle's relational query API should traverse tables. It helps shape nested results, but it does not create a database foreign key by itself. This distinction is central to understanding Drizzle's design and is covered in the [official relations documentation](https://orm.drizzle.team/docs/relations).
+
+A TypeScript type can help prevent mistakes while writing code. It cannot stop a script, another service, or a manual SQL command from inserting invalid data. Put important invariants in PostgreSQL too.
+
+## Build the smallest working setup
+
+For the PostgreSQL setup in this repository, you need a running PostgreSQL database, a connection URL, a runtime driver, Drizzle ORM, and Drizzle Kit for schema management. The app's existing `package.json` already declares these dependencies. In a new project, the core install is:
+
+```bash
+pnpm add drizzle-orm postgres
+pnpm add -D drizzle-kit
+```
+
+Add `zod` and `drizzle-zod` if you plan to use the validation integration. The exact driver package changes with the database adapter you choose; a PostgreSQL `pgTable` schema is not automatically portable to MySQL or SQLite because column types and SQL features vary by dialect.
+
+Keep connection details in environment configuration rather than source code. The project template uses:
+
+```bash
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/drizzle_express_db
+```
+
+The CLI needs its own config so it knows where the schema lives and where to write migration artifacts:
+
+```ts
+import { defineConfig } from "drizzle-kit";
+import "dotenv/config";
+
+export default defineConfig({
+  schema: "./src/db/schema/*.ts",
+  out: "./drizzle",
+  dialect: "postgresql",
+  dbCredentials: {
+    url: process.env.DATABASE_URL!,
+  },
+});
+```
+
+The runtime connection is initialized separately in the application. `drizzle.config.ts` is primarily for Drizzle Kit commands; importing it is not what creates the app's database client. Drizzle Kit commands can use the same connection URL for local development, while a deployment may use separate runtime and migration credentials or URLs.
+
+## Start from the data model
+
+The project models an author as a user and each post as belonging to a user. The `users` table also includes an activation flag, timestamps, a password hash, and a soft-delete timestamp. The `posts` table holds the foreign key.
+
+Before reading the table definitions, it helps to map a few common PostgreSQL builders to their SQL ideas:
+
+| Drizzle builder | PostgreSQL type or rule | Typical use |
+|---|---|---|
+| `serial("id")` | Auto-incrementing integer | Simple surrogate key |
+| `integer("count")` | `INTEGER` | Counts and integer foreign keys |
+| `varchar("name", { length: 100 })` | Bounded `VARCHAR` | Short labels and names |
+| `text("content")` | `TEXT` | Long-form content |
+| `boolean("is_active")` | `BOOLEAN` | Flags |
+| `timestamp("created_at")` | `TIMESTAMP` | Date and time values; decide whether you need time-zone semantics |
+| `numeric("amount", { precision: 12, scale: 2 })` | `NUMERIC(12, 2)` | Exact decimal values; choose a deliberate JS representation |
+| `uuid("id")` | `UUID` | Distributed or externally visible identifiers |
+| `jsonb("metadata")` | `JSONB` | Flexible structured values that still need a clear shape |
+
+The names inside `pgTable` have two roles. The object key (`createdAt`) is the TypeScript property used in queries; the string argument (`"created_at"`) is the physical PostgreSQL column name. Being explicit lets application code use camelCase while the database uses snake_case.
+
+The usual relational building blocks are primary keys, foreign keys, nullability, defaults, unique constraints, and indexes. A primary key identifies a row. A foreign key points to a row in another table. A unique constraint rejects duplicate values. An index can speed up a lookup but normally does not enforce uniqueness. Drizzle's schema builders declare these rules; migrations are what apply them to the database.
+
+Here is the relevant shape from `src/db/schema/users.ts`:
+
+```ts
+import { sql } from "drizzle-orm";
+import { pgTable, serial, varchar, timestamp, boolean, uniqueIndex } from "drizzle-orm/pg-core";
+
+export const users = pgTable(
+  "users",
+  {
+    id: serial("id").primaryKey(),
+    name: varchar("name", { length: 100 }).notNull(),
+    email: varchar("email", { length: 150 }).notNull(),
+    passwordHash: varchar("password_hash", { length: 255 }).notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    deletedAt: timestamp("deleted_at"),
+  },
+  (table) => ({
+    uniqueNonDeletedEmail: uniqueIndex("users_non_deleted_email_unique")
+      .on(table.email)
+      .where(sql`${table.deletedAt} IS NULL`),
+  }),
+);
+```
+
+A few details are easy to gloss over:
+
+- `serial(...).primaryKey()` gives the database an auto-incrementing integer primary key.
+- `.notNull()` describes a database constraint and also affects the inferred TypeScript type.
+- `.default(true)` lets PostgreSQL supply a value when an insert omits the column. `.notNull()` then rules out `NULL`.
+- `deletedAt` has no `.notNull()`, so `null` means the row has not been soft-deleted (assuming the application uses that convention).
+- The partial unique index is useful for email lookups and enforces uniqueness for non-deleted accounts. A plain `index()` would speed up lookups but would not reject duplicates.
+
+The `posts` table declares its database-level relationship to users:
+
+```ts
+export const posts = pgTable("posts", {
+  id: serial("id").primaryKey(),
+  title: varchar("title", { length: 200 }).notNull(),
+  content: text("content"),
+  authorId: integer("author_id").references(() => users.id, {
+    onDelete: "cascade",
+  }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+```
+
+`authorId` is nullable because it does not call `.notNull()`. The foreign key still says that any non-null `author_id` must match a real user. `onDelete: "cascade"` asks PostgreSQL to delete a user's posts if that user is hard-deleted. That is a real database behavior because it is attached to `.references(...)` and appears in the generated SQL migration.
+
+The project uses `timestamp` columns with `.defaultNow()`. When designing a new application, decide whether timestamps should be stored with time-zone semantics; PostgreSQL `timestamp` without time zone and `timestamptz` have different behavior. Drizzle lets you make that choice in the column definition.
+
+## Schema types: select rows and insert values
+
+Drizzle derives useful types directly from table definitions:
+
+```ts
+type User = typeof users.$inferSelect;
+type NewUser = typeof users.$inferInsert;
+```
+
+`User` represents a row you read. `NewUser` represents values that can be inserted. A generated ID and defaulted fields can be optional for inserts, while required columns such as `name`, `email`, and `passwordHash` remain required. The same schema that describes the database therefore informs the query types without a separate model-generation step.
+
+Nullability is part of the inferred type. In this project's `Post` type, `content` and `authorId` can be `null` on a selected row because those database columns are nullable. For inserts, nullable columns can generally be omitted or explicitly set to `null`; required columns without defaults must be provided. This is different from saying that an API field is optional. `content?: string | null` and `content: string | null` mean different things in a request contract: the first allows omission; the second requires a key whose value may be null.
+
+The type inference is based on the TypeScript schema definition. It does not inspect the live database on every query, so a missing or outdated migration can make the compile-time model disagree with the actual database. TypeScript can also be bypassed by untyped JavaScript or a cast. Keep schema code and applied migrations aligned.
+
+These types describe what the database layer expects. They are not automatically the right shapes for HTTP requests or responses. A public registration request contains a plain password, while the database row contains `passwordHash`. A public response should not contain either field unless there is a very specific reason.
+
+## Connect the driver and Drizzle
+
+This project uses Drizzle's PostgreSQL adapter for the `postgres` (Postgres.js) driver. In `src/db/index.ts`, the pattern is:
+
+```ts
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+import "dotenv/config";
+import * as schema from "./schema";
+
+const connectionString = process.env.DATABASE_URL!;
+const client = postgres(connectionString);
+
+export const db = drizzle(client, { schema });
+```
+
+The driver owns the connections; Drizzle builds the database API on top of it. Passing the schema object enables the relational query API and gives Drizzle the table and relation metadata it needs. This is why `src/db/schema/index.ts` acts as a barrel file: it gathers the tables and relations into one import.
+
+The `!` after `process.env.DATABASE_URL` is only a TypeScript non-null assertion. It does not check the environment variable at runtime. In a deployed service, validate required configuration during startup and fail with a clear message if it is missing. Drizzle has adapters for more than one PostgreSQL driver, so check the [PostgreSQL connection guide](https://orm.drizzle.team/docs/get-started-postgresql) when choosing or changing the driver.
+
+### Pooling and prepared statements
+
+The `postgres` package manages connections and exposes options such as maximum connections, idle timeout, and connection timeout. For example, a long-running Node service might start with:
+
+```ts
+const client = postgres(connectionString, {
+  max: 10,
+  idle_timeout: 20,
+  connect_timeout: 10,
+});
+```
+
+Treat those values as configuration to size for your database and deployment, not universal best settings. If ten app instances each open ten database connections, the database may see up to one hundred connections. Serverless applications often need a provider's connection pooler so short-lived app instances do not exhaust the database's connection limit.
+
+The `postgres` driver uses prepared statements by default. Some transaction-mode poolers do not support server-side prepared statements because they can route successive transactions to different backend connections. In that setup, the provider's instructions may require `postgres(connectionString, { prepare: false })`. This is a driver-and-pooler interaction, not a general Drizzle switch; see the official [PostgreSQL connection guide](https://orm.drizzle.team/docs/get-started-postgresql) and your database provider's documentation before changing it.
+
+## Relations: foreign keys versus query metadata
+
+The repository defines the same user/post association for Drizzle's relational queries in `src/db/schema/relations.ts`:
+
+```ts
+export const userRelations = relations(users, ({ many }) => ({
+  posts: many(posts),
+}));
+
+export const postsRelations = relations(posts, ({ one }) => ({
+  author: one(users, {
+    fields: [posts.authorId],
+    references: [users.id],
+  }),
+}));
+```
+
+Think of these declarations as navigation instructions:
+
+- A user has many posts: `user.posts` will be an array.
+- A post has one author: `post.author` will be one user or `null`, because `authorId` is nullable.
+
+The foreign key in `posts.ts` protects database integrity. The `relations(...)` declarations power Drizzle's relational query API. They are related, but not interchangeable: changing the relation metadata alone does not add a constraint to PostgreSQL. Drizzle's stable 0.x API uses `relations()`, as this project does. The current docs describe a newer relations API too, so the [v1-to-v2 migration notes](https://orm.drizzle.team/docs/relations-v1-v2) are useful context when comparing examples across versions.
+
+A query can now ask for a user and their posts in one structured result:
+
+```ts
+const userWithPosts = await db.query.users.findFirst({
+  where: (users, { eq }) => eq(users.id, userId),
+  with: {
+    posts: true,
+  },
+});
+```
+
+The result is either `undefined` if no user matches, or a user object with a `posts` array. You can request a narrower nested shape too:
+
+```ts
+const postWithAuthor = await db.query.posts.findFirst({
+  where: (posts, { eq }) => eq(posts.id, postId),
+  with: {
+    author: {
+      columns: { id: true, name: true },
+    },
+  },
+});
+```
+
+Because `authorId` may be `NULL`, the returned author may be `null`. Types reflect that optionality; it should be handled in the API response or business logic.
+
+### Do relational queries create N+1 round trips?
+
+With this project's Drizzle 0.x relational query API, `with: { posts: true }` does not make the application loop over users and send a separate network query for each user's posts. Drizzle builds one SQL statement for the requested nested result; the PostgreSQL implementation uses correlated lateral subqueries and JSON aggregation to assemble related rows. That avoids the classic N+1 **round-trip** pattern.
+
+One SQL statement is not a promise that every relational query is fast. A large nested result can still do substantial work, and filtering, ordering, limits, and indexes still matter. Inspect the SQL and query plan when performance matters, and compare a relational query with an explicit join if the workload calls for it. This behavior is specific to the installed query API; check the [versioned relations guidance](https://orm.drizzle.team/docs/relations-v1-v2) when upgrading.
+
+### How a many-to-many relation grows
+
+Users and posts are one-to-many. If posts later had tags and a tag could label many posts, add a junction table rather than putting a list of tag IDs in a column:
+
+```ts
+import { primaryKey } from "drizzle-orm/pg-core";
+
+export const tags = pgTable("tags", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 80 }).notNull().unique(),
+  description: text("description"),
+});
+
+export const postsToTags = pgTable(
+  "posts_to_tags",
+  {
+    postId: integer("post_id").notNull().references(() => posts.id, {
+      onDelete: "cascade",
+    }),
+    tagId: integer("tag_id").notNull().references(() => tags.id, {
+      onDelete: "cascade",
+    }),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.postId, table.tagId] }),
+  }),
+);
+```
+
+The composite primary key prevents the same tag from being linked to the same post twice. Each foreign key points to one side of the relationship. Add matching navigation metadata as well:
+
+```ts
+export const postsRelations = relations(posts, ({ one, many }) => ({
+  author: one(users, {
+    fields: [posts.authorId],
+    references: [users.id],
+  }),
+  tagLinks: many(postsToTags),
+}));
+
+export const tagsRelations = relations(tags, ({ many }) => ({
+  postLinks: many(postsToTags),
+}));
+
+export const postsToTagsRelations = relations(postsToTags, ({ one }) => ({
+  post: one(posts, {
+    fields: [postsToTags.postId],
+    references: [posts.id],
+  }),
+  tag: one(tags, {
+    fields: [postsToTags.tagId],
+    references: [tags.id],
+  }),
+}));
+```
+
+When applying this to the project, extend its existing `postsRelations` declaration instead of defining a second one. A nested query can then traverse the link rows to get a post's tags. This explicit table is also where extra relationship data can live later, such as `addedAt` or `sortOrder`.
+
+## Query builder and relational query API
+
+There are two common ways to read data. Use `db.select()` when you want to express SQL directly: choose fields, filter, join, group, or paginate. Use `db.query` when a nested object shape follows the declared relations.
+
+A selected projection is often better than returning every column:
+
+```ts
+const [user] = await db
+  .select({
+    id: users.id,
+    name: users.name,
+    email: users.email,
+  })
+  .from(users)
+  .where(eq(users.id, userId))
+  .limit(1);
+```
+
+The type is inferred from the selected fields. The array can be empty, so `user` may be `undefined`. A `findFirst()` relational query has similar not-found behavior. Make those cases explicit in controller logic rather than checking the array itself as though it were a row.
+
+The shape is intentionally familiar if you know SQL. Conceptually, this query is:
+
+```sql
+SELECT id, name, email
+FROM users
+WHERE id = $1
+LIMIT 1;
+```
+
+Drizzle quotes identifiers and binds the value as a parameter. The table and column references keep the TypeScript side connected to your schema, while the database still executes SQL.
+
+To join posts to authors and flatten the result, use a regular join:
+
+```ts
+const postsWithAuthors = await db
+  .select({
+    postId: posts.id,
+    title: posts.title,
+    authorId: users.id,
+    authorName: users.name,
+  })
+  .from(posts)
+  .leftJoin(users, eq(posts.authorId, users.id));
+```
+
+A left join preserves a post even when `authorId` is `NULL`; the selected author fields are then nullable. Choose `innerJoin` when rows without a matching author should be excluded. The [select guide](https://orm.drizzle.team/docs/select) covers projections, conditions, joins, ordering, and pagination.
+
+### Filtering and ordering
+
+The examples below assume the relevant helpers are imported from `drizzle-orm`, for example `import { and, asc, count, desc, eq, ilike, or, sql } from "drizzle-orm";`.
+
+Drizzle's operators represent familiar SQL predicates. The values passed to them are parameterized:
+
+```ts
+const matchingUsers = await db
+  .select({ id: users.id, name: users.name })
+  .from(users)
+  .where(
+    and(
+      eq(users.isActive, true),
+      or(
+        ilike(users.name, "%ed%"),
+        ilike(users.email, "%@example.com"),
+      ),
+    ),
+  )
+  .orderBy(asc(users.name), asc(users.id));
+```
+
+Common operators include `eq` and `ne` for equality, `gt`/`gte` and `lt`/`lte` for comparisons, `inArray` for membership, `isNull` and `isNotNull`, `like`/`ilike` for patterns, and `and`, `or`, and `not` for combining conditions. Import them from `drizzle-orm`. Use `isNull(column)` for SQL `IS NULL`; comparing a column to JavaScript `null` with `eq` is not the right SQL null check. The [filter operators reference](https://orm.drizzle.team/docs/operators) lists the available operators.
+
+For a stable page of posts, include an explicit order and a tie-breaker:
+
+```ts
+const page = await db
+  .select({ id: posts.id, title: posts.title, createdAt: posts.createdAt })
+  .from(posts)
+  .orderBy(desc(posts.createdAt), desc(posts.id))
+  .limit(pageSize)
+  .offset(offset);
+```
+
+Rows with the same timestamp still have a deterministic order because `id` breaks the tie. Offset pagination is easy to understand, but large offsets become increasingly expensive and concurrent inserts can shift page boundaries; cursor pagination is often a better fit for large feeds.
+
+### Aggregates and SQL expressions
+
+The builder supports grouping and aggregate helpers such as `count`, `sum`, `avg`, `min`, and `max`. For example, count posts per author:
+
+```ts
+const countsByAuthor = await db
+  .select({
+    authorId: posts.authorId,
+    postCount: count(),
+  })
+  .from(posts)
+  .groupBy(posts.authorId);
+```
+
+When a database function or expression is not covered by a helper, use Drizzle's `sql` template inside the query:
+
+```ts
+const normalizedEmails = await db
+  .select({
+    id: users.id,
+    lowerEmail: sql<string>`lower(${users.email})`,
+  })
+  .from(users);
+```
+
+The `${users.email}` reference is rendered as an escaped column identifier, and a dynamic value such as `${searchTerm}` is parameterized. The generic `sql<string>` tells TypeScript what you expect; it does not transform or validate the runtime value. Avoid building SQL by concatenating user input. `sql.raw()` deliberately bypasses parameterization and escaping, so reserve it for trusted, constant SQL fragments. See the [SQL template documentation](https://orm.drizzle.team/docs/sql).
+
+Inserts, updates, and deletes also read like SQL. PostgreSQL's `returning()` is handy when the API needs the affected row:
+
+```ts
+const [createdPost] = await db
+  .insert(posts)
+  .values({ title, content, authorId })
+  .returning({ id: posts.id, title: posts.title });
+```
+
+`values()` is parameterized by the driver/ORM; keep data in values rather than concatenating it into SQL strings. Drizzle supports SQL expressions for cases that need a database-side expression. The [insert guide](https://orm.drizzle.team/docs/insert) shows returning values, bulk inserts, and conflict handling.
+
+### Upserts and conflicts
+
+PostgreSQL's `ON CONFLICT` lets a write handle a uniqueness conflict in one statement. The following example uses the illustrative `tags` table above, where `name` has a unique constraint:
+
+```ts
+const [tag] = await db
+  .insert(tags)
+  .values({ name: tagName, description })
+  .onConflictDoUpdate({
+    target: tags.name,
+    set: { description },
+  })
+  .returning({ id: tags.id, name: tags.name, description: tags.description });
+```
+
+Use `.onConflictDoNothing({ target: tags.name })` when a duplicate should leave the existing row untouched; add `.returning()` if the caller needs to distinguish an insert from a conflict. The target must correspond to a primary key, unique constraint, or unique index. Upsert is not automatically the right behavior for every domain: a duplicate registration should usually return a conflict instead of silently overwriting account data.
+
+The same pattern applies to updates and hard deletes. Use `.returning()` to distinguish “row changed” from “nothing matched”:
+
+```ts
+const [updated] = await db
+  .update(users)
+  .set({ name: nextName })
+  .where(eq(users.id, userId))
+  .returning({ id: users.id, name: users.name });
+
+if (!updated) {
+  // No user matched this ID.
+}
+
+const [deleted] = await db
+  .delete(posts)
+  .where(eq(posts.id, postId))
+  .returning({ id: posts.id });
+```
+
+`delete()` is a hard delete. In this schema, deleting a user this way also cascades to their posts because of the foreign key action. The API's user `DELETE` route now uses an `update()` to set `deletedAt` and deactivate the account instead. Soft-deleted users and their posts remain in the database, so reads need an explicit policy for whether those records should appear.
+
+## Validation belongs at the boundary
+
+TypeScript types disappear at runtime. Express receives untrusted JSON, so the handler still needs validation before sending data to Drizzle. This repository uses Zod and `drizzle-zod` to derive schemas from tables:
+
+```ts
+export const insertUserSchema = createInsertSchema(users, {
+  email: (schema) => schema.email(),
+}).omit({ id: true, createdAt: true });
+```
+
+This is useful for keeping insert rules close to the database schema, but it does not mean a database insert schema is automatically a good public API schema. In particular:
+
+- `passwordHash` is a required database field, but a user should send a `password`, which the server hashes.
+- `createSelectSchema(users)` includes database fields such as `passwordHash`; do not use it as a public response allowlist.
+- Updates usually need a different schema from inserts because most fields should be optional and immutable fields should be excluded.
+
+A registration flow should validate a public input shape, hash the password, then insert the hash and return only safe columns:
+
+```ts
+const registrationSchema = z.object({
+  name: z.string().min(1).max(100),
+  email: z.string().email().max(150),
+  password: z.string().min(8),
+});
+
+const input = registrationSchema.parse(req.body);
+const passwordHash = await bcrypt.hash(input.password, 10);
+
+const [createdUser] = await db
+  .insert(users)
+  .values({
+    name: input.name,
+    email: input.email,
+    passwordHash,
+  })
+  .returning({
+    id: users.id,
+    name: users.name,
+    email: users.email,
+  });
+```
+
+This example reflects the repository's current bcrypt cost setting; password policy and hashing parameters should be reviewed for a real deployment. The point for Drizzle is the boundary: validate the HTTP contract, map it to database values deliberately, and project the response deliberately. See [Drizzle's Zod integration](https://orm.drizzle.team/docs/zod) for generated insert and select schemas.
+
+## Migrations: a record of database change
+
+`drizzle.config.ts` tells Drizzle Kit where to find the TypeScript schema, where to save migration files, and which PostgreSQL dialect to use. The project scripts separate two actions:
+
+```bash
+pnpm db:generate
+pnpm db:migrate
+```
+
+`generate` compares the current schema with Drizzle Kit's saved snapshot and creates SQL for the difference. `migrate` applies unapplied SQL files to a database and records which migrations ran. Generating a file does not change the database. Read the SQL before applying it, especially when it drops columns, changes nullability, or transforms existing data. The [Drizzle migrations guide](https://orm.drizzle.team/docs/migrations) explains the workflow, and the [generate command reference](https://orm.drizzle.team/docs/drizzle-kit-generate) describes how snapshots and SQL are produced.
+
+The usual code-first loop is:
+
+1. Edit a table definition in `src/db/schema/`.
+2. Run `pnpm db:generate`.
+3. Inspect the new SQL file and metadata snapshot. Confirm that renames, nullability changes, defaults, indexes, and foreign-key actions match your intention.
+4. Apply the migration to a development database with `pnpm db:migrate`.
+5. Run the app against that database and keep the schema, migration, and application change together in version control.
+
+For a controlled deployment step, the ORM also provides a programmatic migrator:
+
+```ts
+import { migrate } from "drizzle-orm/postgres-js/migrator";
+import { db } from "./db";
+
+await migrate(db, { migrationsFolder: "./drizzle" });
+```
+
+This is an alternative way to apply the same SQL migration files; it does not replace reviewing or versioning them. It can run in a pre-deploy command or another single, controlled migration process. In a multi-replica deployment, avoid having every app instance race to migrate at startup unless that rollout strategy is explicitly designed for it. Ensure the built application includes the migration folder at the configured path.
+
+Migration generation compares schema states; it cannot infer every business data transformation. If a column changes shape or needs a value derived from existing data, write and review the needed SQL explicitly. Do not rewrite a migration that has already been applied in a shared environment; create a new forward migration so all environments can follow the same history.
+
+The project's migration history makes the idea concrete:
+
+1. `0000_confused_tony_stark.sql` creates `users` and `posts`, then adds the foreign key from posts to users.
+2. `0001_fixed_skin.sql` adds `deleted_at` to users.
+3. `0002_tough_maximus.sql` adds the required `password_hash` column and an email index.
+4. `0003_smooth_dakota_north.sql` replaces that ordinary index with a partial unique index for non-deleted accounts.
+
+That sequence is the evolution of the database, not just a copy of today's schema. Keep migrations committed with the code that expects them. For a table that already contains rows, adding a new `NOT NULL` column with no default may fail; a safe rollout can add it nullable, backfill existing rows, then add the not-null constraint in a later migration.
+
+For local experiments, `drizzle-kit push` can sync schema changes directly. It is convenient when throwing away a local database is acceptable, but it does not leave the same reviewed, versioned SQL history. For a shared or deployed database, migrations make changes inspectable and repeatable. The official docs distinguish [generate/migrate from push](https://orm.drizzle.team/docs/faq).
+
+There is also a database-first workflow: if a database already exists and is the source of truth, Drizzle Kit can introspect it with `pull` and create TypeScript schema definitions. This repository takes the code-first route: define tables in TypeScript, generate SQL migrations, and apply them. Pick one clear source of truth for a project so schema changes do not drift between hand-edited database structure and application code.
+
+Drizzle Studio is a visual database browser available through the project's `pnpm db:studio` script. It can help inspect table shapes and sample rows while learning. Treat data edits made through a browser as database changes, though: if they represent a schema change, capture that schema change in code and a migration so another environment can reproduce it. Studio is a development aid, not a substitute for migration history or application authorization.
+
+## Constraints, indexes, and soft deletion
+
+Constraints answer, “What data is valid even if it comes from another code path?” Indexes answer, “How can the database find matching rows efficiently?” They solve different problems.
+
+The project's original `email_indx` was an ordinary index. It can speed up a lookup such as `WHERE email = ...`, but it does not prevent duplicate emails. An application-side “check, then insert” has a race: two concurrent requests can both observe no row. PostgreSQL should enforce uniqueness too. If a deleted account must keep its email reserved, a regular unique constraint is appropriate:
+
+```ts
+email: varchar("email", { length: 150 }).notNull().unique(),
+```
+
+Before adding a unique constraint, check and resolve duplicates in the existing database, then generate and review the migration. The [indexes and constraints guide](https://orm.drizzle.team/docs/indexes-constraints) covers unique constraints, foreign keys, and index definitions.
+
+Soft deletion introduces a policy choice. A global unique email reserves the address even after setting `deletedAt`. If your product intentionally lets someone reuse an email after the old account is soft-deleted, use a PostgreSQL **partial unique index** that only covers rows whose `deleted_at` is `NULL`:
+
+```ts
+import { sql } from "drizzle-orm";
+import { pgTable, serial, varchar, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+
+export const users = pgTable(
+  "users",
+  {
+    id: serial("id").primaryKey(),
+    email: varchar("email", { length: 150 }).notNull(),
+    deletedAt: timestamp("deleted_at"),
+    // Other user columns...
+  },
+  (table) => ({
+    uniqueNonDeletedEmail: uniqueIndex("users_non_deleted_email_unique")
+      .on(table.email)
+      .where(sql`${table.deletedAt} IS NULL`),
+  }),
+);
+```
+
+The predicate is part of the uniqueness rule: any number of soft-deleted rows may retain the address, but only one non-deleted row may use it. With this policy, authentication lookups must also filter `deletedAt IS NULL`; otherwise an old deleted row can be mistaken for the current account. Restoring an old account can fail if a newer account already claimed the address. The API source now uses this partial-index policy and soft-deletes users; the schema/migration change is documented with the code. Drizzle represents the index predicate with an `sql` expression, as shown in the [PostgreSQL index docs](https://orm.drizzle.team/docs/indexes-constraints).
+
+A soft delete is an update, not a delete:
+
+```ts
+await db
+  .update(users)
+  .set({ deletedAt: new Date() })
+  .where(and(eq(users.id, userId), isNull(users.deletedAt)))
+  .returning({ id: users.id });
+```
+
+The row remains in the table, so ordinary reads must decide whether to include `deletedAt IS NULL`. The column alone does not hide records or cascade anything. By contrast, a hard delete triggers the `ON DELETE CASCADE` rule defined by the post foreign key. Make the lifecycle policy explicit in queries and in any relationships that depend on it.
+
+## Transactions make a group of writes atomic
+
+Suppose creating an account also creates its first post. Without a transaction, the user insert could succeed while the post insert fails, leaving only half of the intended operation. Put both writes in a transaction:
+
+```ts
+await db.transaction(async (tx) => {
+  const [user] = await tx
+    .insert(users)
+    .values({ name, email, passwordHash })
+    .returning({ id: users.id });
+
+  if (!user) throw new Error("User insert returned no row");
+
+  await tx.insert(posts).values({
+    title: firstPostTitle,
+    authorId: user.id,
+  });
+});
+```
+
+If the callback completes, Drizzle commits; if it throws, the transaction rolls back. Use the transaction-scoped `tx` for every statement that belongs to the unit. Transactions do not make an external email or HTTP call atomic with PostgreSQL, so keep slow external side effects outside the transaction and use an outbox or other durable pattern when both database state and delivery must be coordinated. See the [transactions guide](https://orm.drizzle.team/docs/transactions).
+
+## Performance habits that stay useful
+
+Drizzle makes queries typed, but query design still matters:
+
+- Select only the columns the caller needs, especially when tables contain private data.
+- Add `limit` and deterministic ordering to list endpoints; for large or frequently changing result sets, consider cursor pagination instead of large offsets.
+- Add indexes for measured query patterns. The email lookup is a plausible candidate; an index on `posts.author_id` may help when listing posts by author. Each index adds write and storage cost.
+- Inspect generated SQL when a query is surprising, and use PostgreSQL's `EXPLAIN` to understand the database plan.
+- Consider `.prepare()` for a frequently executed query whose SQL shape stays fixed and whose values change; measure before adding it.
+- Keep query result shape in mind. A join can return flat rows; a relational query can return nested objects. Choose the shape that fits the caller rather than fetching data “just in case.”
+
+Type safety helps you compose a valid query. It does not guarantee that the query is fast or that its returned fields are safe to expose.
+
+### Reusing a prepared query
+
+Drizzle can prepare a query once and supply values through named placeholders on each execution:
+
+```ts
+const findUserById = db
+  .select({ id: users.id, name: users.name, email: users.email })
+  .from(users)
+  .where(eq(users.id, sql.placeholder("id")))
+  .prepare("find_user_by_id");
+
+const [user] = await findUserById.execute({ id: 42 });
+```
+
+This is most useful for a stable query shape called repeatedly. Prepared statements do not remove database execution cost, and the `postgres` driver already has its own prepared-statement behavior. Transaction-mode poolers can impose additional restrictions, so follow the provider guidance described in the connection section. See the [prepared query performance guide](https://orm.drizzle.team/docs/perf-queries).
+
+## What I learned by reviewing this project
+
+Writing a reference from working code means checking the details against the repository, not just repeating the README. Reviewing the original implementation surfaced a few useful lessons; the fixes described here are now reflected in the API source:
+
+- The original email index was not unique, so it could not guarantee one non-deleted account per email. The schema now uses a partial unique index, and registration handles conflicts in the insert itself.
+- The original user creation handler omitted the required `password_hash`; user creation now validates a public password field, hashes it, and inserts the hash.
+- The original full-row user read included `passwordHash`; user endpoints now select a safe public projection.
+- The original user lookup checked the result array instead of its first row; it now destructures the row and returns 404 when no user matches.
+- The test source imports Vitest and Supertest, but neither is declared in `package.json` or the lockfile, and it uses a stale default route import. The test file is a starting point, not proof that a complete test setup is installed and runnable.
+
+These are not Drizzle quirks. They are examples of why ORM-level type inference, runtime request validation, database constraints, and API response design all have separate jobs. The repository is a learning project; treat the code as a place to practice and improve, not as a production security endorsement.
+
+## Testing database behavior
+
+Types can catch many query-shape mistakes while compiling, but they cannot prove that the configured database has the expected migrations or that a foreign key behaves the way you intend. A focused integration test should connect to a dedicated test database, apply the same migrations as the app, insert test rows, make a request or query, and assert the behavior. Never point a test reset helper at a development or production database.
+
+For this schema, useful database-level cases include:
+
+- A post with a missing author ID is rejected when the ID is non-null.
+- A post may have a null author because `authorId` is nullable.
+- Deleting a user hard-deletes related posts because the foreign key uses `ON DELETE CASCADE`.
+- Duplicate emails among non-deleted accounts are rejected by the partial unique index; deleted accounts may retain and release an email according to the product policy.
+- A selected public user shape omits `passwordHash`.
+
+The repository has a small reset helper that deletes users; because posts have an `ON DELETE CASCADE` foreign key, deleting those users also clears their posts. The API's user `DELETE` endpoint now soft-deletes instead, so tests that exercise either path should make that distinction explicit. Keep test database configuration separate from local development configuration, and make test data deterministic so a failure can be reproduced.
+
+## Troubleshooting checklist
+
+When Drizzle behaves unexpectedly, find which layer is out of sync before changing code:
+
+| Symptom | First thing to check |
+|---|---|
+| PostgreSQL says `relation "users" does not exist` | Confirm `DATABASE_URL` points to the intended database and apply migrations with `db:migrate`. |
+| TypeScript says an insert is missing a field | Check `.notNull()` and defaults in the table definition; required database columns must be supplied or defaulted. |
+| The query compiles but fails with a constraint error | Inspect the actual database constraint and the generated SQL; TypeScript cannot prove the row exists or the constraint is satisfied. |
+| `db.query.users` is unavailable or nested relations fail | Confirm the table and relation exports are included in the schema object passed to `drizzle(client, { schema })`. |
+| A lookup returns no row | Remember `select()` returns an array and `findFirst()` returns `undefined`; check the result after awaiting the query. |
+| A relation returns `null` | Check the foreign-key value and nullability. Relation metadata cannot invent a missing row. |
+| Duplicate emails still insert | An ordinary index is not unique; verify the partial unique index migration has been applied. |
+| Docs examples have unfamiliar relation syntax | Check your installed `drizzle-orm` version; this project uses the 0.x `relations()` API. |
+
+When in doubt, reduce the question to one table, one query, and its SQL equivalent. Inspecting the schema definition, applied migration, generated SQL, and actual result often identifies the mismatch faster than changing several layers at once.
+
+## A short practice path
+
+To turn the concepts into muscle memory, try these changes in a local copy:
+
+1. Inspect the partial unique email index migration and identify which existing rows would need cleanup before applying it.
+2. Add a `posts.author_id` index only after deciding which query it should support.
+3. Write one `db.select()` query with a projection and one `db.query` with nested posts. Compare their result types.
+4. Add a registration input schema that accepts a password, hashes it, and returns only `id`, `name`, and `email`.
+5. Add a comment table and model its author and post relations.
+6. Add a nullable column to a table with sample data, then practice a safe multi-step migration to make it required.
+
+For each change, ask: What is the TypeScript shape? What SQL will run? Which invariant does PostgreSQL enforce? What shape should the API expose?
+
+## Quick reference
+
+- **Tables and columns:** `pgTable`, column builders, `.notNull()`, `.default()`, `.references()`.
+- **Connection pieces:** `drizzle-orm` provides the typed API, the driver speaks to PostgreSQL, and `drizzle-kit` manages schema tooling.
+- **Database relationships:** foreign keys and constraints on table definitions.
+- **Nested query relationships:** `relations()` metadata plus `db.query` in this repository's Drizzle 0.x API.
+- **Row and insert types:** `typeof table.$inferSelect` and `typeof table.$inferInsert`.
+- **CRUD and filters:** `db.select()`, `db.insert()`, `db.update()`, `db.delete()`, `eq`, `and`, `or`, `isNull`, PostgreSQL `.returning()`, and conflict handlers for upserts.
+- **Request validation:** Zod at the HTTP boundary; map public input to database values intentionally.
+- **Schema changes:** `db:generate`, review SQL, then `db:migrate`; use `push` for disposable local experiments and `pull` when introspecting an existing database.
+- **Local inspection:** `db:studio` opens a visual browser for the configured database during development.
+- **Integrity:** database constraints protect data across all clients; application validation provides clearer user-facing errors.
+- **Atomic writes:** `db.transaction(async (tx) => { ... })`.
+- **Repeated query shapes:** `.prepare()` with `sql.placeholder()` can reuse a typed query; benchmark before keeping it.
+- **Custom SQL:** use the parameterized `sql` template for an expression the query builder does not cover; avoid interpolating untrusted text into raw SQL.
+
+## Further reading
+
+- [My Drizzle Express API repository](https://github.com/edmealem-k/drizzle-express-api)
+- [Users schema](https://github.com/edmealem-k/drizzle-express-api/blob/master/src/db/schema/users.ts), [posts schema](https://github.com/edmealem-k/drizzle-express-api/blob/master/src/db/schema/posts.ts), and [relations](https://github.com/edmealem-k/drizzle-express-api/blob/master/src/db/schema/relations.ts)
+- [Drizzle overview](https://orm.drizzle.team/docs/overview), [schema declaration](https://orm.drizzle.team/docs/sql-schema-declaration), and [PostgreSQL setup](https://orm.drizzle.team/docs/get-started-postgresql)
+- [Relations](https://orm.drizzle.team/docs/relations) and [v1-to-v2 migration notes](https://orm.drizzle.team/docs/relations-v1-v2)
+- [Relational queries](https://orm.drizzle.team/docs/rqb), including nested results and prepared query support
+- [Select](https://orm.drizzle.team/docs/select), [filters](https://orm.drizzle.team/docs/operators), [SQL template](https://orm.drizzle.team/docs/sql), [insert and upsert](https://orm.drizzle.team/docs/insert), [prepared queries](https://orm.drizzle.team/docs/perf-queries), [transactions](https://orm.drizzle.team/docs/transactions), and [Zod integration](https://orm.drizzle.team/docs/zod)
+- [Migrations](https://orm.drizzle.team/docs/migrations), [Drizzle Kit generate](https://orm.drizzle.team/docs/drizzle-kit-generate), and [indexes and constraints](https://orm.drizzle.team/docs/indexes-constraints)
+
+Drizzle clicked for me when I stopped thinking of it as a layer that hides SQL and started treating it as a typed way to describe and compose SQL. The schema tells TypeScript what I mean; PostgreSQL constraints decide what the database accepts; migrations carry that model safely forward. Keeping those responsibilities clear makes the code easier to trust and makes the next schema change easier to reason about.
