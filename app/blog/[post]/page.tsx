@@ -13,6 +13,8 @@ import Comments from "@/app/components/shared/Comments";
 import PageHeading from "@/app/components/shared/PageHeading";
 import { getAllPosts, getPostBySlug } from "@/lib/content";
 import { MDXContent } from "@/lib/content/mdx";
+import TableOfContents from "@/app/components/shared/TableOfContents";
+import { extractArticleHeadings } from "@/lib/content/headings";
 import { siteConfig } from "@/config/site";
 
 type Props = {
@@ -84,6 +86,8 @@ export default async function Post(props: Props) {
     notFound();
   }
 
+  const articleHeadings = extractArticleHeadings(post.content || "");
+
   return (
     <main className="max-w-7xl mx-auto md:px-16 px-6">
       <header>
@@ -137,8 +141,9 @@ export default async function Post(props: Props) {
                 priority
               />
             </div>
+            <TableOfContents headings={articleHeadings} />
 
-            <div className="mt-8 dark:text-zinc-400 text-zinc-600 leading-relaxed tracking-tight text-lg">
+            <div id="article-content" className="mt-8 dark:text-zinc-300 text-zinc-700 leading-relaxed tracking-tight text-lg">
               {post.content ? <MDXContent source={post.content} /> : null}
             </div>
           </div>
