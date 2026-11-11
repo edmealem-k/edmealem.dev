@@ -19,7 +19,7 @@ export default function FeaturedPosts({ params }: { params?: string }) {
             href={`/blog/${post.slug}`}
             className="flex flex-col gap-4 dark:bg-primary-bg bg-secondary-bg p-5 rounded-lg border dark:border-zinc-800 border-zinc-200"
           >
-            <div className="relative w-full h-[180px] overflow-hidden rounded-md">
+            <div className="relative w-full aspect-video overflow-hidden rounded-md">
               <Image
                 src={post.coverImage?.image || fallbackImage}
                 className="dark:bg-zinc-800 bg-zinc-100 rounded-md object-cover"
