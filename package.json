@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "build:resume": "bun run scripts/generate-resume.ts"
   },
   "dependencies": {
     "@giscus/react": "^3.1.0",
