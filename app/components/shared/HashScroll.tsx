@@ -3,6 +3,7 @@ import Link from "next/link";
 
 type props = {
   text: React.ReactNode;
+  id?: string;
   event?: any;
 };
 
@@ -10,27 +11,18 @@ type props = {
 //   header.scrollIntoView({ behavior: "smooth" });
 // };
 
-export const slugify = (id: any) => {
-  if (id) {
-    id.toString()
-      .toLowerCase()
-      .replaceAll(/[^-\w]+/g, "-")
-      .replaceAll(/--+/g, "-")
-      .replace(/^-|-$/g, "");
-  }
-  return "";
-};
+export const slugify = (text: React.ReactNode): string =>
+  (text?.toString() || "")
+    .toLowerCase()
+    .replaceAll(/[^-\w]+/g, "-")
+    .replaceAll(/--+/g, "-")
+    .replace(/^-|-$/g, "");
 
-export default function HashScroll({ text, event }: props) {
+export default function HashScroll({ text, id, event }: props) {
   return (
     <Link
       onClick={event}
-      href={`#${text
-        ?.toString()
-        .toLowerCase()
-        .replaceAll(/[^-\w]+/g, "-")
-        .replaceAll(/--+/g, "-")
-        .replace(/^-|-$/g, "")}`}
+      href={`#${id || slugify(text)}`}
     >
       {text}
     </Link>
