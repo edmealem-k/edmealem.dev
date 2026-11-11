@@ -8,6 +8,7 @@
         "@giscus/react": "^3.1.0",
         "autoprefixer": "^10.4.15",
         "framer-motion": "^12.43.0",
+        "github-slugger": "^2.0.0",
         "gray-matter": "^4.0.3",
         "next": "^16.4.5",
         "next-mdx-remote": "^6.0.0",
