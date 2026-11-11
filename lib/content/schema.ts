@@ -30,7 +30,7 @@ export const PostFrontmatterSchema = z.object({
   published: z.boolean().default(true),
   coverImage: z.string().nullable().optional(),
   coverImageAlt: z.string().nullable().optional(),
-  canonicalLink: z.string().optional(),
+  canonicalLink: z.string().nullable().optional(),
 });
 
 export type PostFrontmatter = z.infer<typeof PostFrontmatterSchema>;

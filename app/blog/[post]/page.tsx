@@ -154,6 +154,7 @@ export default async function Post(props: Props) {
                     src={post.author.photo.image}
                     alt={post.author.photo.alt}
                     fill
+                    sizes="48px"
                     className="dark:bg-zinc-800 bg-zinc-300 rounded-full object-cover"
                   />
                 </div>

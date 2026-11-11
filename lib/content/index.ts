@@ -149,7 +149,7 @@ export function getAllPosts(includeDrafts = false): PostType[] {
       author: {
         name: siteConfig.name,
         photo: {
-          image: "/images/about/profile-placeholder.webp",
+          image: "/edmealem_kassahun.jpg",
           alt: siteConfig.name,
         },
         twitterUrl: siteConfig.social.x,
@@ -200,7 +200,7 @@ export function getPostBySlug(slug: string, includeDrafts = false): PostType | n
     author: {
       name: siteConfig.name,
       photo: {
-        image: "/images/about/profile-placeholder.webp",
+        image: "/edmealem_kassahun.jpg",
         alt: siteConfig.name,
       },
       twitterUrl: siteConfig.social.x,

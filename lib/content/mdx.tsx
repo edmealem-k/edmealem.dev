@@ -145,7 +145,7 @@ export function MDXContent({ source }: { source: string }) {
       options={{
         mdxOptions: {
           remarkPlugins: [remarkGfm],
-          rehypePlugins: [rehypeSlug, rehypePrism],
+          rehypePlugins: [rehypeSlug, [rehypePrism, { ignoreMissing: true }]],
         },
       }}
     />
