@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+  <title id="title">Three tenant isolation models</title>
+  <desc id="desc">Pool shares the application and database, bridge combines shared and dedicated resources, and silo gives each tenant dedicated resources.</desc>
+  <defs>
+    <linearGradient id="wash" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#111827"/><stop offset="1" stop-color="#090d16"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#71839d"/></marker>
+  </defs>
+  <rect width="1200" height="520" rx="28" fill="url(#wash)"/>
+  <text x="40" y="55" fill="#f3f6fb" font-family="Arial, sans-serif" font-size="25" font-weight="700">Three ways to place tenant data</text>
+  <text x="40" y="82" fill="#9aa9bc" font-family="Arial, sans-serif" font-size="15">Choose the boundary that fits customer requirements, cost, and operating capacity.</text>
+
+  <g font-family="Arial, sans-serif">
+    <rect x="32" y="108" width="360" height="332" rx="20" fill="#101827" stroke="#26344a"/>
+    <rect x="412" y="108" width="360" height="332" rx="20" fill="#101827" stroke="#26344a"/>
+    <rect x="792" y="108" width="376" height="332" rx="20" fill="#101827" stroke="#26344a"/>
+
+    <text x="58" y="148" fill="#60a5fa" font-size="13" font-weight="700" letter-spacing="1.5">POOL</text>
+    <text x="58" y="176" fill="#eef3fa" font-size="19" font-weight="700">Share the data plane</text>
+    <text x="58" y="200" fill="#9aa9bc" font-size="14">One app and database for many tenants.</text>
+    <rect x="58" y="222" width="308" height="48" rx="10" fill="#172337" stroke="#31425d"/>
+    <text x="212" y="252" text-anchor="middle" fill="#dce7f5" font-size="15" font-weight="600">Shared application</text>
+    <path d="M212 272v22" stroke="#71839d" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="58" y="300" width="308" height="108" rx="12" fill="#0b1220" stroke="#31425d"/>
+    <text x="78" y="326" fill="#9aa9bc" font-size="13" font-weight="700">SHARED DATABASE TABLE</text>
+    <rect x="78" y="340" width="268" height="25" rx="6" fill="#14253a"/>
+    <circle cx="94" cy="352" r="5" fill="#60a5fa"/>
+    <text x="108" y="357" fill="#dce7f5" font-size="13">tenant_id = A</text>
+    <rect x="78" y="372" width="268" height="25" rx="6" fill="#14253a"/>
+    <circle cx="94" cy="384" r="5" fill="#34d399"/>
+    <text x="108" y="389" fill="#dce7f5" font-size="13">tenant_id = B</text>
+
+    <text x="438" y="148" fill="#a78bfa" font-size="13" font-weight="700" letter-spacing="1.5">BRIDGE</text>
+    <text x="438" y="176" fill="#eef3fa" font-size="19" font-weight="700">Mix shared and dedicated</text>
+    <text x="438" y="200" fill="#9aa9bc" font-size="14">Keep a shared control plane; isolate where needed.</text>
+    <rect x="438" y="222" width="308" height="48" rx="10" fill="#172337" stroke="#31425d"/>
+    <text x="592" y="252" text-anchor="middle" fill="#dce7f5" font-size="15" font-weight="600">Shared identity and routing</text>
+    <path d="M592 272v22" stroke="#71839d" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="438" y="300" width="145" height="108" rx="12" fill="#0b1220" stroke="#31425d"/>
+    <rect x="601" y="300" width="145" height="108" rx="12" fill="#0b1220" stroke="#31425d"/>
+    <text x="510" y="328" text-anchor="middle" fill="#60a5fa" font-size="12" font-weight="700">STANDARD</text>
+    <text x="510" y="356" text-anchor="middle" fill="#dce7f5" font-size="14">Pooled DB</text>
+    <text x="510" y="380" text-anchor="middle" fill="#9aa9bc" font-size="12">tenant_id scope</text>
+    <text x="673" y="328" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="700">PREMIUM</text>
+    <text x="673" y="356" text-anchor="middle" fill="#dce7f5" font-size="14">Dedicated DB</text>
+    <text x="673" y="380" text-anchor="middle" fill="#9aa9bc" font-size="12">separate boundary</text>
+
+    <text x="818" y="148" fill="#34d399" font-size="13" font-weight="700" letter-spacing="1.5">SILO</text>
+    <text x="818" y="176" fill="#eef3fa" font-size="19" font-weight="700">Dedicate the data plane</text>
+    <text x="818" y="200" fill="#9aa9bc" font-size="14">Each tenant gets its own resources.</text>
+    <rect x="818" y="222" width="324" height="82" rx="12" fill="#0b1220" stroke="#31425d"/>
+    <circle cx="843" cy="247" r="7" fill="#60a5fa"/>
+    <text x="862" y="252" fill="#dce7f5" font-size="14" font-weight="600">Tenant A</text>
+    <rect x="985" y="234" width="136" height="25" rx="6" fill="#172337"/>
+    <text x="1053" y="251" text-anchor="middle" fill="#dce7f5" font-size="12">App + DB A</text>
+    <circle cx="843" cy="279" r="7" fill="#34d399"/>
+    <text x="862" y="284" fill="#dce7f5" font-size="14" font-weight="600">Tenant B</text>
+    <rect x="985" y="266" width="136" height="25" rx="6" fill="#172337"/>
+    <text x="1053" y="283" text-anchor="middle" fill="#dce7f5" font-size="12">App + DB B</text>
+    <rect x="818" y="320" width="324" height="88" rx="12" fill="#14251f" stroke="#315743"/>
+    <text x="840" y="349" fill="#a7f3d0" font-size="14" font-weight="700">Useful when requirements demand it</text>
+    <text x="840" y="374" fill="#b6c6bc" font-size="13">Independent keys, regions, restore, or capacity</text>
+    <text x="840" y="394" fill="#b6c6bc" font-size="13">come with more provisioning and operations.</text>
+  </g>
+
+  <path d="M80 472h1040" stroke="#34435a" stroke-width="2"/>
+  <circle cx="80" cy="472" r="5" fill="#60a5fa"/>
+  <circle cx="1120" cy="472" r="5" fill="#34d399"/>
+  <text x="80" y="500" fill="#9aa9bc" font-family="Arial, sans-serif" font-size="13">More resource sharing</text>
+  <text x="1120" y="500" text-anchor="end" fill="#9aa9bc" font-family="Arial, sans-serif" font-size="13">More tenant separation</text>
+</svg>

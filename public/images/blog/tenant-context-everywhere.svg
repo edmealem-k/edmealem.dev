@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
+  <title id="title">Tenant context across shared infrastructure</title>
+  <desc id="desc">A verified tenant context scopes database rows, cache keys, object storage, background jobs, and audit events.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#111827"/><stop offset="1" stop-color="#090d16"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#71839d"/></marker>
+  </defs>
+  <rect width="1200" height="500" rx="28" fill="url(#bg)"/>
+  <text x="40" y="54" fill="#f3f6fb" font-family="Arial, sans-serif" font-size="25" font-weight="700">Tenant context must travel with the data</text>
+  <text x="40" y="82" fill="#9aa9bc" font-family="Arial, sans-serif" font-size="15">The database is one boundary. Every shared system needs its own tenant-aware key or authorization check.</text>
+
+  <g stroke="#71839d" stroke-width="2" fill="none">
+    <path d="M600 204v30H165v26" marker-end="url(#arrow)"/>
+    <path d="M600 204v30H455v26" marker-end="url(#arrow)"/>
+    <path d="M600 204v30H745v26" marker-end="url(#arrow)"/>
+    <path d="M600 204v30h435v26" marker-end="url(#arrow)"/>
+    <path d="M600 374v44" marker-end="url(#arrow)"/>
+  </g>
+
+  <g font-family="Arial, sans-serif">
+    <rect x="420" y="112" width="360" height="92" rx="18" fill="#15243a" stroke="#3b82f6" stroke-width="2"/>
+    <text x="600" y="145" text-anchor="middle" fill="#93c5fd" font-size="13" font-weight="700" letter-spacing="1.5">SERVER-VERIFIED</text>
+    <text x="600" y="174" text-anchor="middle" fill="#f3f6fb" font-size="22" font-weight="700">TenantContext</text>
+    <text x="600" y="193" text-anchor="middle" fill="#9aa9bc" font-size="13">tenantId · identity · membership · permission</text>
+
+    <rect x="40" y="260" width="250" height="114" rx="16" fill="#101827" stroke="#34445e"/>
+    <text x="62" y="294" fill="#60a5fa" font-size="12" font-weight="700" letter-spacing="1">POSTGRESQL</text>
+    <text x="62" y="324" fill="#eef3fa" font-size="17" font-weight="700">Rows and relationships</text>
+    <text x="62" y="350" fill="#9aa9bc" font-size="13">tenant_id + resource ID</text>
+
+    <rect x="330" y="260" width="250" height="114" rx="16" fill="#101827" stroke="#34445e"/>
+    <text x="352" y="294" fill="#a78bfa" font-size="12" font-weight="700" letter-spacing="1">CACHE</text>
+    <text x="352" y="324" fill="#eef3fa" font-size="17" font-weight="700">Tenant-aware keys</text>
+    <text x="352" y="350" fill="#9aa9bc" font-size="13">tenant:{id}:resource:{id}</text>
+
+    <rect x="620" y="260" width="250" height="114" rx="16" fill="#101827" stroke="#34445e"/>
+    <text x="642" y="294" fill="#fbbf24" font-size="12" font-weight="700" letter-spacing="1">OBJECT STORAGE</text>
+    <text x="642" y="324" fill="#eef3fa" font-size="17" font-weight="700">Authorize before signing</text>
+    <text x="642" y="350" fill="#9aa9bc" font-size="13">tenant prefix + short URL</text>
+
+    <rect x="910" y="260" width="250" height="114" rx="16" fill="#101827" stroke="#34445e"/>
+    <text x="932" y="294" fill="#34d399" font-size="12" font-weight="700" letter-spacing="1">BACKGROUND JOBS</text>
+    <text x="932" y="324" fill="#eef3fa" font-size="17" font-weight="700">Revalidate at worker</text>
+    <text x="932" y="350" fill="#9aa9bc" font-size="13">trusted context + scoped read</text>
+
+    <rect x="340" y="418" width="520" height="60" rx="15" fill="#101827" stroke="#34445e"/>
+    <text x="600" y="443" text-anchor="middle" fill="#f472b6" font-size="12" font-weight="700" letter-spacing="1">AUDIT AND OPERATIONS</text>
+    <text x="600" y="465" text-anchor="middle" fill="#dce7f5" font-size="14">Tenant + actor + action; quotas and metrics without secrets</text>
+  </g>
+</svg>
