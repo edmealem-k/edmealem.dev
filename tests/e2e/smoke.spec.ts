@@ -14,7 +14,7 @@ test.describe("Site Smoke & Route Tests", () => {
     await expect(mainLocator).not.toContainText("victoreke.com");
 
     // Footer content displays owner copyright
-    const footerLocator = page.locator("footer");
+    const footerLocator = page.getByRole("contentinfo");
     await expect(footerLocator).toContainText("Edmealem Kassahun");
     await expect(footerLocator).toContainText("All rights reserved");
 
