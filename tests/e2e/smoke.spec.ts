@@ -9,35 +9,35 @@ test.describe("Site Smoke & Route Tests", () => {
     );
 
     // Main body content should have no leaked previous author branding
-    const mainContent = await page.textContent("main");
-    expect(mainContent).not.toContain("Victor Eke");
-    expect(mainContent).not.toContain("victoreke.com");
+    const mainLocator = page.locator("main");
+    await expect(mainLocator).not.toContainText("Victor Eke");
+    await expect(mainLocator).not.toContainText("victoreke.com");
 
     // Footer content displays owner copyright
-    const footerContent = await page.textContent("footer");
-    expect(footerContent).toContain("Edmealem Kassahun");
-    expect(footerContent).toContain("All rights reserved");
+    const footerLocator = page.locator("footer");
+    await expect(footerLocator).toContainText("Edmealem Kassahun");
+    await expect(footerLocator).toContainText("All rights reserved");
 
     // Work Experience renders all three companies with verified dates
-    const bodyContent = await page.textContent("body");
-    expect(bodyContent).toContain("Work Experience");
-    expect(bodyContent).toContain("Nexudy");
-    expect(bodyContent).toContain("Askuala Link");
-    expect(bodyContent).toContain("Nexus Tech Solutions");
-    expect(bodyContent).toContain("Nov 2025");
-    expect(bodyContent).toContain("Present");
-    expect(bodyContent).toContain("Mar 2025 - Oct 2025");
-    expect(bodyContent).toContain("Nov 2024 - Feb 2025");
-    expect(bodyContent).not.toContain("TODO_VERIFY");
-    expect(bodyContent).not.toContain("Jan 1, 2024");
-    expect(bodyContent).not.toContain("Dates to confirm");
+    const bodyLocator = page.locator("body");
+    await expect(bodyLocator).toContainText("Work Experience");
+    await expect(bodyLocator).toContainText("Nexudy");
+    await expect(bodyLocator).toContainText("Askuala Link");
+    await expect(bodyLocator).toContainText("Nexus Tech Solutions");
+    await expect(bodyLocator).toContainText("Nov 2025");
+    await expect(bodyLocator).toContainText("Present");
+    await expect(bodyLocator).toContainText("Mar 2025 - Oct 2025");
+    await expect(bodyLocator).toContainText("Nov 2024 - Feb 2025");
+    await expect(bodyLocator).not.toContainText("TODO_VERIFY");
+    await expect(bodyLocator).not.toContainText("Jan 1, 2024");
+    await expect(bodyLocator).not.toContainText("Dates to confirm");
 
     // Education section renders below Work Experience
-    expect(bodyContent).toContain("Education");
-    expect(bodyContent).toContain("Bahir Dar University");
-    expect(bodyContent).toContain("Bachelor of Science in Software Engineering");
-    expect(bodyContent).toContain("Jun 2021 - Jun 2025");
-    expect(bodyContent).toContain("GPA: 3.86/4.00");
+    await expect(bodyLocator).toContainText("Education");
+    await expect(bodyLocator).toContainText("Bahir Dar University");
+    await expect(bodyLocator).toContainText("Bachelor of Science in Software Engineering");
+    await expect(bodyLocator).toContainText("Jun 2021 - Jun 2025");
+    await expect(bodyLocator).toContainText("GPA: 3.86/4.00");
   });
 
   test("about page renders biography, contact, and usage", async ({ page }) => {
@@ -79,10 +79,10 @@ test.describe("Site Smoke & Route Tests", () => {
   test("blog detail page renders article and reading time", async ({ page }) => {
     await page.goto("/blog/tenant-isolation-in-saas");
     await expect(page.locator("h1").first()).toContainText(
-      "Tenant Isolation in Multi-Tenant SaaS Applications"
+      "Multi-Tenant SaaS Architecture: A Practical Guide to Tenant Isolation"
     );
     await expect(page.locator("body")).toContainText("min read");
-    await expect(page.locator("body")).toContainText("Authentication is not tenant authorization");
+    await expect(page.locator("body")).toContainText("What does “tenant” mean?");
   });
 
   test("invalid blog slug returns 404", async ({ page }) => {
