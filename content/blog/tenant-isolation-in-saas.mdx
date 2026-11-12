@@ -1,137 +1,539 @@
 ---
-title: "Tenant Isolation in Multi-Tenant SaaS Applications"
+title: "Multi-Tenant SaaS Architecture: A Practical Guide to Tenant Isolation"
 slug: "tenant-isolation-in-saas"
-description: "A practical look at authentication, tenant context, authorization, and database query boundaries in TypeScript backends."
+description: "A code-rich guide to modeling tenants, enforcing isolation across APIs and PostgreSQL, and carrying tenant context through caches, files, queues, and operations."
 date: "2026-11-09"
-updatedAt: null
+updatedAt: "2026-11-12"
 author: "edmealem"
-tags: ["TypeScript", "Backend", "Architecture", "Security"]
+tags: ["TypeScript", "PostgreSQL", "SaaS", "Security", "Architecture"]
 featured: true
 published: true
 coverImage: "/images/blog/tenant-isolation-placeholder.webp"
-coverImageAlt: "Illustrative diagram of tenant boundaries"
+coverImageAlt: "Tenant boundaries represented across application and data layers"
 ---
 
-When you build a SaaS application that serves multiple organizations, the hardest part often isn't creating a `tenantId` column. It's making sure that **every request and every data operation respects the tenant boundary**.
+A multi-tenant application lets one running product serve multiple customers while keeping each customer's people, data, configuration, and usage within the right boundary. That sounds like a database problem. It is really an end-to-end application design problem.
 
-That boundary appears in authentication, authorization, API handlers, database queries, background jobs, and even logs. Missing it in one place can expose data that belongs to a different customer.
+A `tenant_id` column is useful, but it does not protect anything by itself. Isolation depends on how the application identifies a tenant, proves the caller belongs to it, authorizes an action, scopes the final data operation, and handles the same data in caches, files, queues, logs, analytics, and backups.
 
-In this article, I'll walk through a practical TypeScript backend approach for thinking about tenant isolation. The code is simplified to illustrate the design, not to represent a production-ready authorization framework.
+I use [Hono Commerce](https://github.com/edmealem-k/hono-commerce), my TypeScript commerce project, as a running reference in this guide. It uses a shared PostgreSQL database, Drizzle ORM, and a Hono API. Some snippets below are simplified from its patterns; other sections, such as PostgreSQL row-level security, describe optional defenses that are not implied to be enabled in that project. Treat the code as a study guide and adapt it to your own threat model and installed library versions.
 
-## Authentication is not tenant authorization
+## What does “tenant” mean?
 
-Authentication answers: **Who is making this request?**
+A tenant is the customer boundary whose data and resources the product must isolate. In a business-to-business product, a tenant often represents a company or workspace. A tenant can have many users, and one person can belong to several tenants.
 
-Authorization answers: **What is this person allowed to do?**
+Do not assume that “one customer,” “one login,” and “one tenant” always mean the same thing. A customer might need separate production and development workspaces, regional data boundaries, or departments with different administrators. Decide what a tenant means for your product before designing your tables, URLs, or billing model.
 
-Multi-tenancy adds another question: **Within which organization is this request being made?**
+These terms are useful to keep separate:
 
-A signed-in user may belong to more than one organization. A valid session should not automatically grant access to every resource referenced by a URL.
+- **User:** a person or service identity that can authenticate.
+- **Tenant:** a customer boundary, such as a store or workspace.
+- **Membership:** the relationship between a user and a tenant, including its role and status.
+- **Tenant context:** the server-validated tenant and membership information for one operation.
+- **Tenant isolation:** the controls that prevent one tenant from reading or changing another tenant's resources.
 
-For example, consider this request:
+Authentication answers “Who are you?” Authorization answers “May you do this?” Tenant isolation answers “Which customer's resource can this operation reach?” A request can pass the first two checks and still cross the third boundary if a query is not scoped correctly. AWS describes tenant isolation as a separate control that uses tenant context to restrict access to resources, rather than treating authentication or a role claim as sufficient isolation ([AWS: Tenant Isolation](https://docs.aws.amazon.com/whitepapers/latest/saas-architecture-fundamentals/tenant-isolation.html)).
 
-```http
-GET /api/organizations/org_123/orders/order_987
+## Start with a threat model and explicit invariants
+
+A useful first threat model is simple: assume a caller can change every client-controlled value, including a tenant slug, tenant ID, resource ID, hostname, query parameter, request body, and cached URL. Also assume that requests can race, workers can retry, processes can restart, and shared infrastructure can fail in partial ways.
+
+Write down a few invariants before implementation. For a pooled application, I want to be able to say:
+
+1. A tenant identifier selects a possible tenant; it does not grant access to it.
+2. Every tenant-scoped operation starts from a verified user or service identity and an authorized tenant context.
+3. Every tenant-owned row has an explicit owner, or an enforceable ownership path to one.
+4. The final read or write checks tenant ownership as part of the data operation.
+5. Tenant context follows data into background jobs, storage, caches, and audit events.
+6. Cross-tenant platform operations use a distinct permission path and produce an audit record.
+7. Missing or invalid context fails closed. It never falls back to “all tenants.”
+
+These invariants make code review concrete. Instead of asking whether an endpoint “looks secure,” ask which tenant context it used, where that context came from, which permission allows the operation, and which predicate or infrastructure boundary proves the target belongs to that tenant.
+
+## Choose an isolation model that fits the product
+
+![Diagram comparing pooled, bridge, and silo tenant isolation models](/images/blog/tenant-isolation-models.svg)
+
+*Figure 1: Original illustration of the pool, bridge, and silo models described by the [AWS SaaS Lens](https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/silo-pool-and-bridge-models.html).*
+
+Multi-tenancy is a spectrum. The application tier, database, object storage, queues, encryption keys, and deployment topology do not all have to use the same isolation model. AWS describes three common shapes: **pool**, where tenants share resources; **silo**, where tenants have dedicated resources; and **bridge**, where the system combines the two ([AWS SaaS Lens: Silo, Pool, and Bridge Models](https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/silo-pool-and-bridge-models.html)).
+
+| Model | Typical shape | Advantages | Costs and risks |
+|---|---|---|---|
+| Pooled | Shared application and database; tenant key on rows | Lower cost, simpler deployments, efficient resource use | Application must consistently enforce row boundaries; noisy-neighbor risk |
+| Siloed | Dedicated database, account, or full stack per tenant | Stronger resource separation; tenant-specific restore, region, or key choices | More provisioning, upgrades, monitoring, and operational cost |
+| Bridge / hybrid | Shared control plane with selected isolated services or tenants | Can meet premium, compliance, or workload needs without isolating everything | More routing and operations complexity; need to know where each tenant lives |
+
+A shared database with `tenant_id` is a common starting point when customers have similar compliance requirements and the team needs a simple operating model. It is not universally correct. Dedicated databases or accounts may be appropriate when customers require independent keys, regions, restore schedules, workload isolation, or contractual boundaries. Microsoft recommends weighing isolation alongside scalability, cost, development complexity, operations, and customizability ([Microsoft: Tenancy Models](https://learn.microsoft.com/en-us/azure/architecture/guide/multitenant/considerations/tenancy-models), [Microsoft: Storage and Data Approaches](https://learn.microsoft.com/en-us/azure/architecture/guide/multitenant/approaches/storage-data)).
+
+A practical decision process is:
+
+1. List contractual, regulatory, residency, and security requirements.
+2. Estimate tenant count, data volume, and usage skew.
+3. Decide what must be isolated: records, database, credentials, compute, storage, region, keys, or all of them.
+4. Write down restore, export, deletion, and tenant-move requirements.
+5. Choose the simplest model that meets those requirements, and define a path for exceptional tenants if the product needs one later.
+
+Do not pick a dedicated database simply because “separate is always safer.” It can reduce some shared-database risks, but still requires correct identity, authorization, routing, credential management, and operational controls. Conversely, a `tenant_id` column does not provide meaningful isolation unless every data path uses it.
+
+## Model users, tenants, and memberships separately
+
+A user account should usually be separate from the tenant membership. That lets one person sign in once and switch between workspaces without creating a second identity for every customer.
+
+A compact relational shape looks like this:
+
+```text
+user
+  id
+  email
+  name
+
+ tenant
+  id
+  slug
+  name
+  status
+
+ tenant_member
+  id
+  tenant_id -> tenant.id
+  user_id   -> user.id
+  role
+  status
 ```
 
-The server needs to verify at least three things:
+In Hono Commerce, the tenant and user tables are global identity/organization records. `tenant_member` connects them and stores the merchant role and membership status. The pair `(tenant_id, user_id)` is unique, so the same user has at most one membership row in a given tenant.
 
-1. The session belongs to a valid user.
-2. The user has an active membership in `org_123` with permission to view orders.
-3. The requested order actually belongs to `org_123`.
-
-Checking only the first two still leaves a potential cross-tenant data leak if the query fetches `order_987` by ID alone.
-
-## Treat tenant context as trusted server state
-
-It is tempting to accept a `tenantId` from a request body and pass it directly to a repository function. That is unsafe unless the server independently verifies the user's relationship to that tenant.
-
-A safer design resolves and validates a tenant context before business logic runs.
+A Drizzle version of the membership table can be shaped like this:
 
 ```ts
-// Illustrative types only — not a complete middleware implementation.
-type TenantContext = {
-  userId: string;
-  tenantId: string;
-  permissions: ReadonlySet<string>;
-};
-
-function requirePermission(
-  context: TenantContext,
-  permission: string,
-): void {
-  if (!context.permissions.has(permission)) {
-    throw new Error("Forbidden");
-  }
-}
+export const tenantMember = pgTable(
+  "tenant_member",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenant.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    role: tenantMemberRoleEnum("role").default("member").notNull(),
+    status: tenantMemberStatusEnum("status").default("active").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("tenant_member_user_idx").on(table.tenantId, table.userId),
+    index("tenant_member_tenant_idx").on(table.tenantId),
+  ],
+);
 ```
 
-In a real application, the context should be created from a validated session and an authoritative membership lookup. Its permissions may need refresh or revocation handling; don't treat stale client-side claims as your source of truth.
+The role should be scoped to the correct identity layer. A global platform administrator is not the same as a tenant owner. In Hono Commerce, tenant roles such as `owner` and `member` are membership properties, while platform roles are user-level properties. This avoids the mistake of making a global `user.role = "admin"` mean “administrator in every customer workspace.”
 
-## Scope the database operation itself
+Store lifecycle and membership lifecycle separately. A tenant might be suspended while its members remain active; a single member can be suspended while the tenant is active. Requests should check both states.
 
-Authorization shouldn't stop at a middleware check. The final query must enforce the same ownership boundary.
+Invitations also belong to a tenant. Store the intended email, role, inviter, status, and tenant ID; use a one-time, expiring secret for acceptance rather than treating an invitation row ID as a bearer credential. On acceptance, verify the token, email policy, tenant status, and invitation status, then create or activate the membership in a transaction.
 
-Suppose an order has `id` and `tenantId` columns. A tenant-aware lookup should include both:
+## Put tenant ownership in the data model
+
+Every tenant-owned table in a pooled relational design should carry an explicit `tenant_id` with a foreign key to the tenant. For example, products, orders, file records, coupons, and invitations can all be directly scoped. It is easier to audit and query than relying on ownership several joins away.
 
 ```ts
-// Pseudocode showing the required predicate.
-const order = await db.query.orders.findFirst({
-  where: and(
-    eq(orders.id, requestedOrderId),
-    eq(orders.tenantId, context.tenantId),
-  ),
+export const product = pgTable(
+  "product",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenant.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    handle: text("handle").notNull(),
+    status: productStatusEnum("status").default("draft").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("product_handle_tenant_idx").on(table.tenantId, table.handle),
+    index("product_status_tenant_idx").on(table.tenantId, table.status),
+  ],
+);
+```
+
+The unique index makes the handle unique within a tenant, not across the entire SaaS. It also reflects a common query shape: “find the product with this handle inside this tenant.” Index tenant-scoped filters and sorts according to actual query patterns, such as `(tenant_id, status, created_at)`. Indexes have write and storage costs, so add them for real access paths rather than mechanically indexing every possible column.
+
+A foreign key from `product.category_id` to `category.id` proves that the category exists, but does not prove that both rows belong to the same tenant. A cross-tenant relationship can still be created if the foreign key omits the tenant key. Composite constraints can make that invalid state impossible:
+
+```sql
+ALTER TABLE product_category
+  ADD CONSTRAINT product_category_tenant_id_unique
+  UNIQUE (tenant_id, id);
+
+ALTER TABLE product
+  ADD CONSTRAINT product_category_same_tenant_fk
+  FOREIGN KEY (tenant_id, category_id)
+  REFERENCES product_category (tenant_id, id);
+```
+
+The same design applies to order lines and orders, file links and files, and other tenant-owned relationships. In Drizzle, a composite foreign key can be declared with `foreignKey({ columns: [...], foreignColumns: [...] })`. Hono Commerce uses this pattern to ensure a product's category belongs to the same tenant. Constraints complement query filters: they stop invalid relationships at the database boundary even if an application path is buggy.
+
+For each table, decide whether it is global, tenant-scoped, user-scoped, or derived from another protected record. Write that classification down. “It does not have a `tenant_id` column” should be a deliberate model choice, not an accidental omission.
+
+## Resolve tenant context without trusting the selector
+
+Many applications let a user choose the tenant using one of these values:
+
+- a nested route such as `/api/v1/tenants/:tenantId/orders`;
+- a workspace slug in the web route, such as `/acme/orders`;
+- a tenant subdomain, such as `acme.example.com`;
+- a tenant header injected by a trusted gateway.
+
+These values help the server find the tenant the caller wants to use. They are not proof the caller can use it. Treat every client-supplied tenant ID, slug, and header as an untrusted selector until the server checks it against the authenticated identity and current membership.
+
+Host-based routing needs one extra care point: trust forwarded-host headers only when they are supplied by a proxy you control and the application rejects direct spoofing paths. Normalize casing and ports, handle reserved subdomains, and keep tenant resolution separate from authorization. A user who guesses `acme.example.com` should not become an `acme` member.
+
+![Request flow from an untrusted tenant selector through identity, membership, permission, and a tenant-scoped query](/images/blog/tenant-request-boundary.svg)
+
+*Figure 2: Resolve and authorize tenant context before querying tenant-owned resources.*
+
+A tenant middleware typically performs these steps:
+
+1. Require a valid session or service identity.
+2. Resolve a tenant from a route parameter or verified tenant hostname.
+3. Confirm the tenant exists and is in an allowed lifecycle state.
+4. Load the caller's membership for `(tenant_id, user_id)`.
+5. Confirm membership is active.
+6. Attach a small, typed context for later handlers.
+7. Continue only after the previous checks succeed.
+
+An abridged version of the Hono Commerce route flow is:
+
+```ts
+export const tenantsRouter = new Hono<TenantEnv>()
+  .use("*", requireAuth())
+  .get(
+    "/:tenantId/orders",
+    requireTenantContext(),
+    requirePermission("ORDERS:READ"),
+    ...listOrdersHandler,
+  );
+```
+
+The middleware resolves tenant and member status and stores the result as `c.get("tenant")`. The permission middleware then evaluates the permission using the tenant membership role. That gives later handlers one authoritative tenant context rather than asking every handler to reinterpret URL, hostname, session, or membership data. The real implementation is in [Hono Commerce's `require-tenant` middleware](https://github.com/edmealem-k/hono-commerce/blob/main/apps/api/src/lib/auth/require-tenant.ts) and [tenant router](https://github.com/edmealem-k/hono-commerce/blob/main/apps/api/src/modules/tenants/tenants.routes.ts).
+
+The context should contain what downstream code needs, such as the internal tenant ID, slug, lifecycle status, membership role, and possibly a permission snapshot or version. Keep it server-created and immutable by convention. Do not accept a caller-provided `role`, `permissions`, or `isOwner` field as a substitute.
+
+An “active tenant” stored in a session is useful as a UI preference. It is not an authorization grant. On every protected request, verify that the selected tenant is still available and the user still belongs to it. If you cache membership decisions, define a short lifetime and a revocation strategy.
+
+## Keep authentication, tenant membership, and permissions distinct
+
+A reliable authorization decision usually has three inputs:
+
+```text
+identity + tenant membership + action permission
+```
+
+For example, “user 123 may refund order 456 in tenant 789” requires the user identity, active membership in tenant 789, a permission to manage/refund orders, and a check that order 456 belongs to tenant 789.
+
+Use a clear role-to-permission policy instead of scattering role comparisons throughout handlers. A route can read as a sequence of enforced boundaries:
+
+```ts
+.get(
+  "/:tenantId/orders/:orderId/refund",
+  requireTenantContext(),
+  requirePermission("ORDERS:MANAGE"),
+  ...createRefundHandler,
+)
+```
+
+Keep platform operations separate. A platform support operation that can inspect a tenant should have a specific platform permission, a reason or ticket reference where appropriate, limited scope, and an audit trail. Do not give ordinary tenant routes an implicit cross-tenant mode. OWASP recommends denying by default and validating authorization for every request ([OWASP Authorization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html)).
+
+Return a consistent “not found” response for a resource that does not belong to the active tenant if revealing its existence would help an attacker enumerate other customers' records. Do not rely on opaque UUIDs as the boundary. IDs can be copied from logs, links, browser history, or a leaked response.
+
+## Enforce the boundary in the final database operation
+
+Middleware is valuable, but a middleware check does not automatically scope SQL. Every read must include the active tenant in its predicate:
+
+```ts
+const product = await db.query.product.findFirst({
+  where: (table, { and, eq }) =>
+    and(
+      eq(table.tenantId, tenantContext.tenantId),
+      eq(table.id, productId),
+    ),
 });
 ```
 
-This pattern matters because resource identifiers can be guessed, leaked, or copied from previous requests. A valid identifier is not proof of permission.
+Hono Commerce's product handler follows this shape, then separately scopes nested variants, category, and file links. The important part is that a valid product ID alone is not enough to locate the row.
 
-It is also important for updates and deletes. Prefer operations that include tenant ownership in the same statement, or use a transaction that enforces the boundary atomically.
-
-## Be careful with nested resources
-
-In relational databases, tenant ownership may be indirect. An order item might belong to an order, which belongs to a tenant. When querying nested data, make sure the join or relationship filter includes that ownership chain.
-
-For new schemas, I like asking three questions before writing an endpoint:
-
-- Where is the authoritative tenant association stored?
-- Which membership or permission permits this action?
-- Can the final query prove that the target resource belongs to the tenant?
-
-Those questions catch many design mistakes before they become security bugs.
-
-## Background jobs need tenant context too
-
-Not all sensitive work happens inside an HTTP request. Background tasks may process emails, imports, notifications, or cleanup operations long after the original request completes.
-
-A job payload containing only `recordId` often isn't enough. Workers need to re-establish the appropriate tenant boundary and fetch the record with the same ownership constraints that a normal API request would use.
+Use the same tenant predicate for mutations, inside the `UPDATE` or `DELETE` statement itself:
 
 ```ts
-// Illustrative job payload, not a complete job contract.
-type RebuildReportJob = {
-  tenantId: string;
-  reportId: string;
-};
+const [updatedOrder] = await db
+  .update(order)
+  .set({ status: "shipped" })
+  .where(
+    and(
+      eq(order.tenantId, tenantContext.tenantId),
+      eq(order.id, orderId),
+    ),
+  )
+  .returning({ id: order.id, status: order.status });
+
+if (!updatedOrder) {
+  return c.json(fail({ error: "Order not found", code: "NOT_FOUND" }), 404);
+}
 ```
 
-The worker must still validate that the report belongs to the tenant. A tenant ID inside a queued payload is not automatically an authorization grant; it should originate from trusted server logic and be rechecked when necessary.
+Avoid a “check ownership, then update by ID only” sequence. The second operation must preserve the boundary, and keeping it in one statement avoids a time gap in which the row or authorization state can change.
 
-## Test the boundary with negative cases
+For creates, derive `tenant_id` from the verified context rather than the request body:
 
-The most convincing tests aren't the ones showing that tenant A can read its own order. They are the ones proving that tenant A **cannot** read, update, or delete tenant B's order.
+```ts
+await db.insert(product).values({
+  tenantId: tenantContext.tenantId,
+  title: input.title,
+  handle: input.handle,
+});
+```
 
-A useful integration suite includes:
+If the client sends a tenant ID for convenience, compare it with the trusted context or ignore it. Never let it override the server-resolved value.
 
-- A user with valid access to tenant A who requests tenant B's resource.
-- A former member whose access has been revoked.
-- A user who belongs to two tenants but has different permissions in each.
-- A background job whose record no longer belongs to the supplied tenant.
-- An update that targets an existing ID but fails the tenant predicate.
+Relational queries do not remove the need for filters on related data. Apply tenant scope to nested relations when those rows are tenant-owned, and use composite foreign keys so the database also rejects cross-tenant associations. Be especially careful with raw SQL, aggregate queries, exports, search endpoints, bulk operations, and administrative scripts; they often bypass the repository methods developers remember to scope.
 
-Run these against a real test database when possible so the tests cover actual query behavior and constraints.
+## PostgreSQL row-level security as defense in depth
 
-## Final thoughts
+PostgreSQL row-level security (RLS) can add a database enforcement layer for pooled tables. When RLS is enabled, normal access must be allowed by a policy; if there is no applicable policy, PostgreSQL uses default deny. Table owners usually bypass RLS unless `FORCE ROW LEVEL SECURITY` is enabled, and superusers or roles with `BYPASSRLS` always bypass it ([PostgreSQL: Row Security Policies](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)).
 
-Multi-tenancy is not a single middleware function. It is a rule that must remain true across the entire lifecycle of a request or job.
+A policy can compare each row's tenant ID with a transaction-local setting:
 
-The design gets more reliable when tenant boundaries are explicit in context, authorization, queries, and tests. That's the kind of backend architecture I want to keep improving in my own projects.
+```sql
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY orders_by_tenant
+ON orders
+USING (
+  tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+)
+WITH CHECK (
+  tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+);
+```
+
+`USING` controls which existing rows are visible or eligible for update/delete. `WITH CHECK` controls rows inserted or produced by updates. If `app.tenant_id` is missing, the expression is not true and the row is denied. Confirm the behavior for your exact PostgreSQL version and role setup before applying policies broadly.
+
+Set the tenant context inside the same transaction that performs the protected queries:
+
+```ts
+await db.transaction(async (tx) => {
+  await tx.execute(
+    sql`select set_config('app.tenant_id', ${tenantContext.tenantId}, true)`,
+  );
+
+  return tx.query.order.findMany({
+    where: (table, { eq }) => eq(table.tenantId, tenantContext.tenantId),
+  });
+});
+```
+
+The third `set_config` argument is `true`, which makes the setting local to the transaction ([PostgreSQL: `set_config`](https://www.postgresql.org/docs/current/functions-admin.html)). This matters with pooled connections: a session-scoped setting can otherwise survive on a connection and affect the next request. Re-establish context in every transaction and return the connection only after commit or rollback.
+
+RLS has operational details that must be designed carefully:
+
+- The normal request role must not be a superuser and must not have `BYPASSRLS`.
+- Decide whether the table owner should be subject to RLS; `FORCE ROW LEVEL SECURITY` affects the owner, not superusers or `BYPASSRLS` roles.
+- Apply and verify policies for every tenant-owned table, including related and newly added tables.
+- Test with the same database role and connection-pooling path used by the application.
+- Use separate, explicit roles and audited paths for migrations, maintenance, and authorized platform-wide work.
+
+RLS is not a substitute for verifying membership and action permissions. A custom tenant setting supplied by the application can still be set incorrectly, and a database role with broad privileges can undermine the boundary. Think of it as a guard against classes of accidental unscoped access, not a magic protection against every application or SQL injection bug. The [OWASP Multi-Tenant Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Multi_Tenant_Security_Cheat_Sheet.html) has useful advice for RLS roles, transaction-local context, and verifying isolation with the deployed access path.
+
+## Secure every place tenant data travels
+
+The SQL query is one boundary. Customer data often passes through other shared systems, and each one needs a tenant-aware design.
+
+![Verified tenant context flowing into PostgreSQL, cache keys, object storage, background jobs, and audit operations](/images/blog/tenant-context-everywhere.svg)
+
+*Figure 3: Carry tenant context into every shared system that stores or processes tenant data.*
+
+### Caches and CDN responses
+
+A cached value that varies by tenant must have the tenant in its key. Include other dimensions that affect the response, such as user permissions, locale, feature set, or filters.
+
+```ts
+const queryKey = ["tenant", tenantId, "orders", normalizedFilters];
+const cacheKey = `tenant:${tenantId}:order:${orderId}`;
+```
+
+Authorize before returning protected cached data. A cache key is not an authorization check. For page and CDN caching, make sure tenant-specific responses do not become publicly cacheable under a URL or key shared by every tenant. Define tenant-aware invalidation when a product, permission, or membership changes.
+
+### Object storage and signed URLs
+
+A tenant-prefixed storage key helps organize files:
+
+```text
+tenants/{tenantId}/products/{timestamp}-{randomId}-{filename}
+```
+
+Hono Commerce generates keys under `tenants/{tenantId}/...`. The prefix alone is not a security boundary. Before creating an upload URL, preview URL, download URL, or delete job, authorize the exact file and operation against the active tenant. Store an object key in the database rather than a permanent public URL for private customer files. Use short-lived signed URLs with the narrowest useful operation and expiration.
+
+For deletion, use a boundary-safe prefix such as `tenants/acme/`, not `tenants/acme`, which could match a different tenant called `acme-west`. Include versions, replicas, exports, and backups in retention decisions. The OWASP multi-tenant guidance has a fuller file-storage checklist, including validating object paths and avoiding client-provided ownership claims.
+
+### Background jobs and message queues
+
+A queued message should carry enough information for the worker to scope its operation, commonly a tenant ID and resource ID. But a tenant ID in a payload is not itself proof of authorization. It should be written by trusted server code, validated at enqueue and consumption time, and checked against the record the worker loads.
+
+```ts
+type RebuildReportJob = {
+  jobType: "rebuild-report";
+  tenantId: string;
+  reportId: string;
+  idempotencyKey: string;
+};
+
+const report = await db.query.report.findFirst({
+  where: (table, { and, eq }) =>
+    and(
+      eq(table.tenantId, job.data.tenantId),
+      eq(table.id, job.data.reportId),
+    ),
+});
+```
+
+Validate job payloads with a schema and scope idempotency keys when the effect is tenant-specific, for example `invoice-email:${tenantId}:${invoiceId}`. A worker should recheck membership or permissions if the delayed action depends on access that could have been revoked. Keep platform-wide jobs explicitly global and restrict their credentials; do not invent a fake tenant to make global work fit a tenant-only interface.
+
+Shared queues also create availability concerns. One tenant can fill a queue or monopolize workers even when data isolation is correct. Consider per-tenant concurrency, quotas, rate limits, queue-age alerts, and fair scheduling alongside service-wide limits.
+
+### Webhooks, exports, search, and analytics
+
+For outgoing webhooks, bind the destination, signing secret, retry state, and event history to the tenant. Sign the actual request and include an event ID so the receiver can deduplicate it. Do not let a tenant choose another tenant's endpoint or signing key.
+
+For incoming provider webhooks, derive tenant ownership from a trusted provider account identifier or a server-owned mapping. Do not trust a tenant ID from an unsigned event body. Verify the provider signature, persist or enqueue the event idempotently, then process it using the mapped tenant scope.
+
+Search indexes, analytics tables, data exports, support downloads, and audit views are easy to overlook because they are not the primary CRUD database. Include tenant identity in partition keys and filters, control who can run cross-tenant reports, and review data aggregation for re-identification risks. Tenant identifiers and names in logs should be useful for operations without exposing secrets or unnecessary personal data.
+
+## Tenant lifecycle: create, suspend, move, and delete
+
+Tenant isolation includes lifecycle transitions, not just steady-state reads.
+
+### Provisioning
+
+Create the tenant and its first owner membership atomically. Otherwise, a failure between those writes can leave an ownerless tenant or a user who appears to own a tenant that was never fully created.
+
+Hono Commerce creates the tenant and owner membership in one database transaction, then sends notifications after commit. That order prevents non-critical email or notification failures from rolling back a successful database transaction.
+
+Provision external resources (such as storage buckets, keys, or dedicated databases) with an idempotent workflow and cleanup for partial failure. Record provisioning state so retries can resume safely.
+
+### Suspension and access revocation
+
+When a tenant is suspended, define which operations stop: storefront access, tenant API access, scheduled jobs, outgoing webhooks, or all of them. Recheck lifecycle state for long-running work and public routes. A suspended tenant's resources should not become visible simply because a worker was queued before suspension.
+
+When a member is suspended or removed, invalidate sessions or permission snapshots as required. A session may still be cryptographically valid after the membership is revoked; current authorization should reflect the revocation policy.
+
+### Tenant movement
+
+If a hybrid architecture moves a tenant from a pooled database to a dedicated database, use a controlled migration workflow: pause or dual-write according to a documented consistency design, copy and verify data, switch the authoritative tenant-to-database mapping, monitor, and retain a rollback path. Keep the application interface tenant-aware so individual handlers do not need to know which physical database holds the tenant.
+
+### Offboarding and deletion
+
+Deletion is broader than `DELETE FROM tenant`. Inventory active rows, files, queue jobs, caches, external provider accounts, backups, search indexes, analytics, and legal retention holds. Define how the customer exports data, when active records are deleted, and how long backups persist. Make cleanup idempotent and auditable. If the product promises cryptographic erasure, plan the encryption-key lifecycle and all copies encrypted under that key.
+
+## Noisy neighbors and tenant-level operations
+
+Isolation is also about availability. In a pooled system, one tenant can consume more than its fair share of database connections, queue capacity, API rate limits, storage, or CPU. This is the noisy-neighbor problem.
+
+Measure usage by tenant where the data is available and useful: request counts, expensive query time, storage, active jobs, queue age, and external API calls. Apply limits to the right dimensions. IP-only rate limiting does not protect a shared service when many users from one tenant act through different networks; tenant-only limits do not stop anonymous abuse before identity is known. A layered limit can combine IP, account, tenant, endpoint, and global capacity.
+
+Tenant-aware metrics also support billing and capacity planning. Avoid turning customer identifiers into unbounded metric labels if the tenant count is large; use logs or a controlled top-tenant report for high-cardinality investigations.
+
+## Test isolation with adversarial cases
+
+Positive tests prove that a tenant can access its own resource. Isolation tests prove that it cannot access another tenant's resource through every relevant operation. Test the same role, ORM, database policies, and connection pool the application uses in production.
+
+A useful test matrix includes:
+
+| Scenario | Expected result |
+|---|---|
+| Tenant A member requests tenant A product | Allowed when permission permits |
+| Tenant A member requests a known tenant B product ID | Not found or forbidden, with no data returned |
+| Tenant A member updates or deletes tenant B resource | No row changed |
+| User supplies tenant B ID in body while context is tenant A | Request remains scoped to A or is rejected |
+| Suspended tenant or membership makes a request | Denied according to lifecycle policy |
+| User belongs to A and B with different roles | Each tenant uses its own membership permissions |
+| Nested relation points at another tenant | Constraint rejects it or query omits it |
+| Two requests reuse the same database connection for A then B | No context or row leakage |
+| Cache hit occurs for another tenant's resource | No cross-tenant response |
+| Delayed job runs after tenant or membership is suspended | Worker rechecks state and follows policy |
+| Signed URL is requested for another tenant's file | No URL is issued |
+| Platform operator performs cross-tenant support access | Only with explicit permission and an audit record |
+
+For RLS, also verify that the request role cannot bypass policies, that every tenant table has the expected policy, and that the test connection is not a superuser or table owner accidentally bypassing the boundary. Schema-derived coverage checks are more reliable than a hand-maintained list that can forget a newly added table.
+
+Tests are strongest when they use two real tenants with overlapping names, handles, or resource types. That catches assumptions such as global uniqueness and reveals whether a query filters by the tenant ID or only by a human-readable slug.
+
+## Common mistakes to review for
+
+- **Using tenant IDs as permissions.** A UUID or slug only identifies a requested tenant.
+- **Filtering only in middleware.** The final query or write still needs to prove ownership.
+- **Using global uniqueness for tenant-local values.** Product handles and SKU values may need `(tenant_id, value)` constraints.
+- **Checking a parent but not related rows.** A product can be in tenant A while a category, image, or variant query crosses to tenant B.
+- **Trusting client tenant fields.** Derive tenant ownership from the verified context.
+- **Treating subdomains as authorization.** Hostnames are routing inputs; membership is an authorization fact.
+- **Putting tenant roles on the global user record.** Roles may differ by tenant.
+- **Relying on unguessable IDs.** Identifier entropy reduces enumeration but does not replace authorization.
+- **Leaving out secondary systems.** Caches, object keys, workers, exports, webhooks, and backups all need boundaries.
+- **Assuming a queue is isolated because it is internal.** Internal messages still need trusted producers, scoped consumers, and bounded resource use.
+- **Using database owner or superuser connections for normal tenant traffic with RLS.** Those roles can bypass policies.
+- **Designing only for reads.** Creates, updates, deletes, bulk work, imports, and retries need the same ownership checks.
+
+## A practical implementation sequence
+
+For a new pooled SaaS feature, I would work through this sequence:
+
+1. Classify the resource as global, user-scoped, or tenant-scoped.
+2. Add tenant ownership and database constraints to the schema.
+3. Add indexes for real tenant-filtered query paths.
+4. Define the request schema without trusting a tenant ID from the caller.
+5. Resolve identity, tenant, membership status, and permission in middleware or a focused service.
+6. Scope reads and mutations with tenant ID in the final database operation.
+7. Scope nested relations and enforce same-tenant foreign keys where possible.
+8. Carry tenant context to cache keys, storage, queues, webhooks, logs, and exports.
+9. Add negative-path tests for cross-tenant reads and writes, revoked membership, and connection reuse.
+10. Review lifecycle, restore, deletion, and operational limits before launch.
+
+The schema, context resolver, query, and tests should reinforce the same tenant boundary. If one layer disagrees about which tenant owns a resource, the design should fail closed and make that discrepancy visible.
+
+## Final checklist
+
+Before shipping a tenant-scoped endpoint or worker, ask:
+
+- Where did the tenant context come from, and what made it trustworthy?
+- Is the caller an active member or authorized service for that tenant?
+- Is the action permitted for this membership in this tenant?
+- Does the final query include the tenant ID?
+- Are nested relations and mutations scoped too?
+- Can database constraints prevent a cross-tenant relationship?
+- Are cache keys and storage operations tenant-aware?
+- Does asynchronous work revalidate tenant and resource ownership?
+- Are platform-wide paths separate, privileged, and audited?
+- Can negative tests prove another tenant's data stays inaccessible?
+- Do suspension, migration, restore, and deletion preserve the same boundary?
+
+Multi-tenancy is not a middleware feature or a column convention. It is a property of the full system. The most dependable designs make tenant ownership explicit in the data model, create tenant context from verified server-side facts, enforce ownership at the point of use, and test the boundary across every shared system.
+
+## Further reading
+
+- [AWS SaaS Architecture Fundamentals: Tenant Isolation](https://docs.aws.amazon.com/whitepapers/latest/saas-architecture-fundamentals/tenant-isolation.html)
+- [AWS SaaS Lens: Silo, Pool, and Bridge Models](https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/silo-pool-and-bridge-models.html)
+- [Microsoft Azure Architecture Center: Tenancy Models](https://learn.microsoft.com/en-us/azure/architecture/guide/multitenant/considerations/tenancy-models)
+- [Microsoft Azure Architecture Center: Storage and Data Approaches](https://learn.microsoft.com/en-us/azure/architecture/guide/multitenant/approaches/storage-data)
+- [PostgreSQL Documentation: Row Security Policies](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)
+- [OWASP Multi-Tenant Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Multi_Tenant_Security_Cheat_Sheet.html)
+- [OWASP Authorization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html)
