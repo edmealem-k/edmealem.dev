@@ -5,6 +5,7 @@ import Social from "./components/shared/Social";
 import { Slide } from "./animation/Slide";
 import ContributionGraph from "./components/pages/GithubCalendarComponent";
 import { siteConfig } from "@/config/site";
+import HireMe from "./components/pages/HireMe";
 
 export default function Home() {
   return (
@@ -30,6 +31,7 @@ export default function Home() {
       <ContributionGraph />
       <Job />
       <Education />
+      <HireMe />
     </main>
   );
 }

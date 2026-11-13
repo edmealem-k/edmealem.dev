@@ -38,6 +38,10 @@ test.describe("Site Smoke & Route Tests", () => {
     await expect(bodyLocator).toContainText("Bachelor of Science in Software Engineering");
     await expect(bodyLocator).toContainText("Jun 2021 - Jun 2025");
     await expect(bodyLocator).toContainText("GPA: 3.86/4.00");
+
+    // Work With Me / Hire section renders
+    await expect(bodyLocator).toContainText("Work With Me");
+    await expect(page.locator("a[href*='upwork.com']").first()).toBeVisible();
   });
 
   test("about page renders biography, contact, and usage", async ({ page }) => {
