@@ -3,7 +3,7 @@ import {
   BiLogoLinkedinSquare,
 } from "react-icons/bi";
 import { FaSquareXTwitter } from "react-icons/fa6";
-import { SiLeetcode, SiWakatime } from "react-icons/si";
+import { SiLeetcode, SiWakatime, SiUpwork } from "react-icons/si";
 import { siteConfig } from "@/config/site";
 
 export const socialLinks = [
@@ -30,13 +30,20 @@ export const socialLinks = [
   },
   {
     id: 4,
+    name: "Upwork",
+    url: siteConfig.social.upwork || "https://www.upwork.com/freelancers/~01d523ce2f1c1dc881",
+    icon: SiUpwork,
+    status: "social",
+  },
+  {
+    id: 5,
     name: "WakaTime",
     url: siteConfig.social.wakatime || "https://wakatime.com/@edmealem",
     icon: SiWakatime,
     status: "social",
   },
   {
-    id: 5,
+    id: 6,
     name: "LeetCode",
     url: siteConfig.social.leetcode || "https://leetcode.com/edmealem_k/",
     icon: SiLeetcode,

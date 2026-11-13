@@ -17,6 +17,7 @@ export interface SiteConfig {
     x: string;
     leetcode?: string;
     wakatime?: string;
+    upwork?: string;
   };
   giscus?: {
     repo?: string;
@@ -50,6 +51,7 @@ export const siteConfig: SiteConfig = {
     x: "https://x.com/edmealem_k",
     leetcode: "https://leetcode.com/edmealem_k/",
     wakatime: "https://wakatime.com/@edmealem",
+    upwork: "https://www.upwork.com/freelancers/~01d523ce2f1c1dc881",
   },
   giscus: {
     repo: process.env.NEXT_PUBLIC_GISCUS_REPO || "edmealem-k/edmealem.dev",

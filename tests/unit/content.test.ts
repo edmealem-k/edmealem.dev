@@ -19,6 +19,7 @@ describe("Site Configuration", () => {
     expect(siteConfig.resumeUrl).toBe("/resume.pdf");
     expect(siteConfig.social.github).toContain("github.com/edmealem-k");
     expect(siteConfig.social.linkedin).toContain("linkedin.com/in/edmealem-k");
+    expect(siteConfig.social.upwork).toContain("upwork.com/freelancers/~01d523ce2f1c1dc881");
   });
 });
 
