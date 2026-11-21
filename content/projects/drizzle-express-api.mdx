@@ -1,0 +1,40 @@
+---
+title: "drizzle-express-api"
+slug: "drizzle-express-api"
+tagline: "Production-grade REST API with Drizzle ORM and PostgreSQL"
+summary: "Type-safe REST API exploring Drizzle ORM architectural patterns in Node.js and TypeScript. Implements relational modeling, zero-downtime schema migrations, query composition, Zod validation, and containerized PostgreSQL."
+category: "Backend & Database Engineering"
+status: "Completed"
+featured: true
+order: 4
+tags: ["TypeScript", "Node.js", "Express", "Drizzle ORM", "PostgreSQL", "Docker", "Zod"]
+coverImage: "/images/projects/drizzle-express-api.webp"
+repositoryUrl: "https://github.com/edmealem-k/drizzle-express-api"
+liveUrl: null
+published: true
+---
+
+*A hands-on reference API exploring Drizzle ORM, PostgreSQL relational modeling, and migrations.*
+
+## Overview
+
+`drizzle-express-api` is an open-source reference API built to demonstrate real-world patterns with Drizzle ORM and PostgreSQL in modern TypeScript backends.
+
+It bridges the gap between basic ORM tutorials and production engineering by focusing on relational modeling, inferred types, explicit query composition, and safe database migration lifecycles.
+
+## Key Technical Highlights
+
+- **Typed Schema Modeling:** Full relational models with primary keys, foreign key constraints, timestamps, and indexes.
+- **Drizzle Queries vs SQL:** Demonstrates both Drizzle's high-level relational query API (`db.query.*`) and explicit SQL builder (`db.select().from()`) with joins.
+- **Migration Workflows:** Automated migration generation and programmatic execution using `drizzle-kit` and Dockerized PostgreSQL instances.
+- **Input Validation & Types:** Runtime contract enforcement using Zod and `drizzle-zod` for zero-overhead validation across request boundaries.
+- **Containerization:** Complete `docker-compose.yml` environment with health checks and volume persistence.
+
+## Technology Stack
+
+- **Language & Runtime:** TypeScript, Node.js
+- **Framework:** Express.js with custom middleware pipelines
+- **ORM:** Drizzle ORM & Drizzle Kit
+- **Database:** PostgreSQL (with `postgres.js` driver)
+- **Validation:** Zod, `drizzle-zod`
+- **Environment:** Docker, Docker Compose

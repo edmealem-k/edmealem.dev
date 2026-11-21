@@ -1,0 +1,39 @@
+---
+title: "build-redis-go"
+slug: "build-redis-go"
+tagline: "In-memory Redis key-value server built from scratch in Go"
+summary: "Custom in-memory key-value database built from scratch in Go (Golang). Implements concurrent TCP client handling, full RESP wire protocol serialization and deserialization, and thread-safe hash map storage with millisecond TTL key expiration."
+category: "Systems & Networking"
+status: "Completed"
+featured: true
+order: 3
+tags: ["Go", "TCP Networking", "RESP Protocol", "Concurrency", "Database Internals"]
+coverImage: "/images/projects/build-redis-go.webp"
+repositoryUrl: "https://github.com/edmealem-k/build-redis-go"
+liveUrl: null
+published: true
+---
+
+*An in-memory Redis key-value server built from scratch using Go and raw TCP sockets.*
+
+## Overview
+
+`build-redis-go` is a systems programming project implementing an in-memory key-value store compatible with standard Redis clients (including `redis-cli`). 
+
+Rather than relying on third-party frameworks, it builds the networking layer directly on top of Go's `net.Listener`, parsing the binary Redis Serialization Protocol (RESP) from raw TCP streams.
+
+## Key Technical Highlights
+
+- **Concurrent TCP Server:** Manages simultaneous client connections using lightweight goroutines and non-blocking I/O.
+- **RESP Protocol Parser:** Complete deserialization and serialization of simple strings, errors, integers, bulk strings, and arrays.
+- **Thread-Safe In-Memory Store:** Synchronized hash-map storage protected by `sync.RWMutex` to guarantee safe concurrent reads and writes.
+- **TTL Expiration Engine:** Passive and active key expiration routines ensuring timely memory cleanup for keys with time-to-live bounds.
+- **Supported Commands:** Full implementation of `PING`, `ECHO`, `SET` (with `PX` millisecond expiration), `GET`, `CONFIG`, and replication foundations.
+
+## Technology Stack
+
+- **Language:** Go (Golang 1.22+)
+- **Networking:** Standard library `net` package with TCP sockets
+- **Protocol:** Redis Serialization Protocol (RESP v2)
+- **Concurrency:** Goroutines, Channels, and `sync.RWMutex`
+- **Testing:** Unit tests and automated integration testing against standard `redis-cli`
